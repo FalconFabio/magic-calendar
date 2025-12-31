@@ -5,6 +5,8 @@ on:
   schedule:
     # Cron en UTC (ex: 02:30 UTC tous les jours)
     - cron: "30 2 * * *"
+  push:
+    branches: ["main"]
 
 permissions:
   contents: read

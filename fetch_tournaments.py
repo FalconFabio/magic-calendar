@@ -22,11 +22,10 @@ from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
 
-# -------------------------
+# =========================================================
 # Sources
-# -------------------------
+# =========================================================
 WPA_FEEDS = {
-    # All + catégories officielles (WPA calendar page exposes these)
     "WPA_ALL": "https://wpapool.com/?mec-ical-feed=1",
     "WPA_HEYBALL": "https://wpapool.com/?mec-ical-feed=1&mec_categories=100",
     "WPA_MATCHROOM": "https://wpapool.com/?mec-ical-feed=1&mec_categories=63",
@@ -41,6 +40,8 @@ WPA_FEEDS = {
 EPBF_CALENDAR_YEAR_URL = "https://www.epbf.com/calendar/{year}/"
 MATCHROOM_SCHEDULE_URL = "https://matchroompool.com/schedule/"
 
+PBS_EVENTS_URL = "https://probilliardseries.com/events/"
+
 PBS_FALLBACK_URLS = [
     "https://77billiards.com/2025/12/10/predator-pro-billiard-series-reveals-stacked-2026-schedule/",
     "https://alison-chang.com/us-pro-billiard-series-announces-2026-season-schedule-across-four-major-cities/",
@@ -49,9 +50,9 @@ PBS_FALLBACK_URLS = [
 DEFAULT_TIMEOUT = 25
 
 
-# -------------------------
+# =========================================================
 # Model
-# -------------------------
+# =========================================================
 @dataclass(frozen=True)
 class Tournament:
     title: str
@@ -72,9 +73,9 @@ class Tournament:
         return self.end.isoformat()
 
 
-# -------------------------
+# =========================================================
 # HTTP
-# -------------------------
+# =========================================================
 def build_session() -> requests.Session:
     s = requests.Session()
     s.headers.update(
@@ -110,9 +111,9 @@ def http_get(url: str) -> str:
     return r.text
 
 
-# -------------------------
+# =========================================================
 # Utils
-# -------------------------
+# =========================================================
 def norm_spaces(s: str) -> str:
     return re.sub(r"\s+", " ", (s or "").strip())
 
@@ -137,9 +138,9 @@ def clean_title(s: str) -> str:
     return t
 
 
-# -------------------------
+# =========================================================
 # Location rules
-# -------------------------
+# =========================================================
 BAD_LOCATION_RE = re.compile(
     r"(?i)\b("
     r"ical|outlook|export|subscribe|add to|google|calendar|share|print|download|"
@@ -154,8 +155,7 @@ def is_bad_location(loc: Optional[str]) -> bool:
     s = norm_spaces(loc)
     if not s:
         return True
-    # "00" / "000" etc.
-    if re.fullmatch(r"\d{1,6}", s):
+    if re.fullmatch(r"\d{1,6}", s):  # "00"
         return True
     if BAD_LOCATION_RE.search(s):
         return True
@@ -201,9 +201,9 @@ def location_precision(loc: Optional[str]) -> int:
     return 2 if "," in s else 1
 
 
-# -------------------------
+# =========================================================
 # JSON-LD extraction (Event -> locality/region/country)
-# -------------------------
+# =========================================================
 def _iter_jsonld_objects(soup: BeautifulSoup) -> Iterable[Any]:
     for script in soup.find_all("script", attrs={"type": "application/ld+json"}):
         raw = script.string or script.get_text(strip=True)
@@ -239,7 +239,6 @@ def _stringify_country(x: Any) -> str:
 def extract_location_from_jsonld(soup: BeautifulSoup) -> Optional[str]:
     """
     Returns "City, Region, Country" or "City, Country" when available.
-    Avoids returning event name.
     """
     for root in _iter_jsonld_objects(soup):
         for d in _walk(root):
@@ -285,9 +284,9 @@ def extract_location_from_jsonld(soup: BeautifulSoup) -> Optional[str]:
     return None
 
 
-# -------------------------
+# =========================================================
 # Generic page location extraction (WPA/Matchroom/EPBF detail)
-# -------------------------
+# =========================================================
 @lru_cache(maxsize=1024)
 def fetch_location_from_page(url: str) -> Optional[str]:
     try:
@@ -309,7 +308,6 @@ def fetch_location_from_page(url: str) -> Optional[str]:
         ".mec-event-meta-item-location",
         ".mec-event-meta .mec-event-location",
         ".mec-event-location",
-        # icon-based blocks (often MEC)
         "i.mec-sl-location",
         "i.mec-fa-map-marker",
         "i.fa-map-marker",
@@ -320,7 +318,6 @@ def fetch_location_from_page(url: str) -> Optional[str]:
         if not el:
             continue
 
-        # if it's an icon, read its parent container
         if el.name == "i":
             parent = el.parent
             if parent:
@@ -344,13 +341,32 @@ def fetch_location_from_page(url: str) -> Optional[str]:
     return None
 
 
-# -------------------------
+# =========================================================
 # Matchroom schedule fallback (STRICT, no title-as-location)
-# -------------------------
+# =========================================================
 MATCHROOM_STOPWORDS = {
-    "wnt", "open", "championship", "championships", "cup", "legends", "pool",
-    "premier", "league", "ranking", "major", "non-ranking", "blue", "ribbon",
-    "world", "international", "masters", "classic", "tour", "series", "women", "men",
+    "wnt",
+    "open",
+    "championship",
+    "championships",
+    "cup",
+    "legends",
+    "pool",
+    "premier",
+    "league",
+    "ranking",
+    "major",
+    "non-ranking",
+    "blue",
+    "ribbon",
+    "world",
+    "international",
+    "masters",
+    "classic",
+    "tour",
+    "series",
+    "women",
+    "men",
 }
 
 
@@ -372,12 +388,6 @@ def _extract_tail_place_words(segment: str, max_words: int = 3) -> str:
 
 
 def parse_location_from_matchroom_title(title: str) -> Optional[str]:
-    """
-    Ex:
-      "Chinese Taipei Open Taipei City, Taiwan Prize Fund: ..." -> "Taipei City, Taiwan"
-      "WNT Legends Manila, Philippines" -> "Manila, Philippines"
-      "2026 UK Open ... Brentwood, Essex, UK" -> "Brentwood, Essex, UK"
-    """
     t = norm_spaces(title)
     t = re.split(r"(?i)\bprize fund\b", t)[0].strip()
     if "," not in t:
@@ -393,7 +403,6 @@ def parse_location_from_matchroom_title(title: str) -> Optional[str]:
         city = _extract_tail_place_words(city_seg, max_words=3)
         return normalize_location(f"{city}, {country_or_region}")
 
-    # 3+ segments: city, region, country
     country = parts[-1]
     region = parts[-2]
     city_seg = parts[-3]
@@ -405,7 +414,6 @@ def matchroom_location_is_suspicious(loc: Optional[str]) -> bool:
     if not loc:
         return True
     s = norm_spaces(loc)
-    # If it contains obvious event keywords, it's probably title-ish, except venue words
     if re.search(r"(?i)\b(wnt|open|championship|cup|legends|pool|premier|league)\b", s):
         if not re.search(r"(?i)\b(arena|hotel|resort|centre|center|club|hall)\b", s):
             return True
@@ -414,9 +422,9 @@ def matchroom_location_is_suspicious(loc: Optional[str]) -> bool:
     return False
 
 
-# -------------------------
+# =========================================================
 # WPA detail URL extraction from ICS
-# -------------------------
+# =========================================================
 URL_RE = re.compile(r"https?://[^\s)>\"]+")
 
 
@@ -440,7 +448,6 @@ def extract_detail_url_from_ical(comp) -> Optional[str]:
     if m:
         return m.group(0)
 
-    # last resort: scan all properties
     try:
         for _, val in comp.property_items():
             s = str(val)
@@ -465,16 +472,37 @@ def parse_wpa_location_from_description(desc: Optional[str]) -> Optional[str]:
     return normalize_location(m.group(1))
 
 
-# -------------------------
-# Date parsing (EPBF / Matchroom)
-# -------------------------
+# =========================================================
+# Date parsing
+# =========================================================
 MONTH_ABBR = {
-    "jan": 1, "feb": 2, "mar": 3, "apr": 4, "may": 5, "jun": 6,
-    "jul": 7, "aug": 8, "sep": 9, "sept": 9, "oct": 10, "nov": 11, "dec": 12
+    "jan": 1,
+    "feb": 2,
+    "mar": 3,
+    "apr": 4,
+    "may": 5,
+    "jun": 6,
+    "jul": 7,
+    "aug": 8,
+    "sep": 9,
+    "sept": 9,
+    "oct": 10,
+    "nov": 11,
+    "dec": 12,
 }
 MONTH_FULL = {
-    "january": 1, "february": 2, "march": 3, "april": 4, "may": 5, "june": 6,
-    "july": 7, "august": 8, "september": 9, "october": 10, "november": 11, "december": 12
+    "january": 1,
+    "february": 2,
+    "march": 3,
+    "april": 4,
+    "may": 5,
+    "june": 6,
+    "july": 7,
+    "august": 8,
+    "september": 9,
+    "october": 10,
+    "november": 11,
+    "december": 12,
 }
 
 
@@ -512,9 +540,9 @@ def parse_matchroom_date_range(raw: str) -> Tuple[date, date, int]:
     raise ValueError(f"Unrecognized Matchroom date format: {raw!r}")
 
 
-# -------------------------
+# =========================================================
 # Fetchers
-# -------------------------
+# =========================================================
 def fetch_wpa_ics(from_d: date, enrich_limit: int, sleep_s: float) -> List[Tournament]:
     out: List[Tournament] = []
     enrich_count = 0
@@ -545,7 +573,6 @@ def fetch_wpa_ics(from_d: date, enrich_limit: int, sleep_s: float) -> List[Tourn
                 if not loc:
                     loc = parse_wpa_location_from_description(comp.get("description"))
 
-                # Enrich from event page (only if still missing)
                 if not loc and detail_url and enrich_count < enrich_limit:
                     cand = fetch_location_from_page(detail_url)
                     loc = normalize_location(cand)
@@ -616,7 +643,6 @@ def fetch_matchroom(from_d: date, enrich_limit: int, sleep_s: float) -> List[Tou
 
         loc: Optional[str] = None
 
-        # 1) Try event page (best) if under limit
         if enrich_count < enrich_limit:
             cand = fetch_location_from_page(href)
             cand = normalize_location(cand)
@@ -626,7 +652,6 @@ def fetch_matchroom(from_d: date, enrich_limit: int, sleep_s: float) -> List[Tou
             if cand and not matchroom_location_is_suspicious(cand):
                 loc = cand
 
-        # 2) Fallback: strict parsing from title tail
         if not loc:
             cand2 = parse_location_from_matchroom_title(title)
             cand2 = normalize_location(cand2)
@@ -650,10 +675,6 @@ def fetch_matchroom(from_d: date, enrich_limit: int, sleep_s: float) -> List[Tou
 
 
 def find_epbf_table_columns(table: BeautifulSoup) -> Optional[Dict[str, int]]:
-    """
-    Try to map columns by header names.
-    Common EPBF headers: Date | Tournament | Place (or Location)
-    """
     header_tr = table.find("tr")
     if not header_tr:
         return None
@@ -675,13 +696,11 @@ def find_epbf_table_columns(table: BeautifulSoup) -> Optional[Dict[str, int]]:
     if i_date is None or i_title is None:
         return None
 
-    # location might be missing from headers on some tables
     return {"date": i_date, "title": i_title, "loc": i_loc if i_loc is not None else 2}
 
 
 @lru_cache(maxsize=256)
 def fetch_epbf_location_from_link(url: str) -> Optional[str]:
-    # skip posters
     if re.search(r"(?i)\.(pdf|jpg|jpeg|png|webp)$", url):
         return None
     return normalize_location(fetch_location_from_page(url))
@@ -705,7 +724,7 @@ def fetch_epbf(year: int, from_d: date, enrich_limit: int, sleep_s: float) -> Li
             continue
 
         rows = table.find_all("tr")
-        for tr in rows[1:]:  # skip header
+        for tr in rows[1:]:
             tds = tr.find_all(["td", "th"])
             if not tds or len(tds) <= colmap["title"]:
                 continue
@@ -732,7 +751,6 @@ def fetch_epbf(year: int, from_d: date, enrich_limit: int, sleep_s: float) -> Li
                 loc_raw = norm_spaces(tds[colmap["loc"]].get_text(" ", strip=True))
             loc = normalize_location(loc_raw)
 
-            # pick a link to enrich (HTML page preferred, not poster)
             link_url = None
             for a in title_cell.find_all("a"):
                 href = (a.get("href") or "").strip()
@@ -746,7 +764,6 @@ def fetch_epbf(year: int, from_d: date, enrich_limit: int, sleep_s: float) -> Li
                     link_url = href
                     break
 
-            # Enrich if missing OR country-only (low precision) and we have a link
             if (location_precision(loc) <= 1) and link_url and enrich_count < enrich_limit:
                 cand = fetch_epbf_location_from_link(link_url)
                 if cand and location_precision(cand) > location_precision(loc):
@@ -771,6 +788,183 @@ def fetch_epbf(year: int, from_d: date, enrich_limit: int, sleep_s: float) -> Li
     return out
 
 
+# =========================================================
+# PBS OFFICIAL: parse https://probilliardseries.com/events/
+# =========================================================
+PBS_CATEGORIES = {
+    "US PBS Open",
+    "PBS Open",
+    "World Championship",
+    "Invitational",
+}
+
+PBS_RANGE_RE = re.compile(
+    r"^(?P<d1>\d{1,2})\s+(?P<m1>[A-Za-z]{3,4})\s*-\s*"
+    r"(?P<d2>\d{1,2})\s+(?P<m2>[A-Za-z]{3,4})\s*,\s*(?P<y>\d{4})$"
+)
+
+
+def try_parse_pbs_date_range(raw: str) -> Optional[Tuple[date, date]]:
+    s = norm_spaces(raw.replace("–", "-").replace("—", "-"))
+    m = PBS_RANGE_RE.match(s)
+    if not m:
+        return None
+
+    d1 = int(m.group("d1"))
+    d2 = int(m.group("d2"))
+    y = int(m.group("y"))
+    m1 = m.group("m1").lower()
+    m2 = m.group("m2").lower()
+    if m1 == "sept":
+        m1 = "sep"
+    if m2 == "sept":
+        m2 = "sep"
+    if m1 not in MONTH_ABBR or m2 not in MONTH_ABBR:
+        return None
+
+    return date(y, MONTH_ABBR[m1], d1), date(y, MONTH_ABBR[m2], d2)
+
+
+def pbs_stop_to_location(stop_name: str) -> Optional[str]:
+    """
+    stop_name examples:
+      - "Las Vegas"
+      - "Indonesia - Bali"  => "Bali, Indonesia"
+      - "Saint Louis"
+    """
+    s = norm_spaces(stop_name)
+
+    if " - " in s:
+        left, right = [p.strip() for p in s.split(" - ", 1)]
+        return normalize_location(f"{right}, {left}")
+
+    us_map = {
+        "Las Vegas": "Las Vegas, USA",
+        "Saint Louis": "Saint Louis, USA",
+        "San Antonio": "San Antonio, USA",
+        "Jacksonville": "Jacksonville, USA",
+        "Los Angeles": "Los Angeles, USA",
+        "Miami": "Miami, USA",
+    }
+    if s in us_map:
+        return normalize_location(us_map[s])
+
+    return normalize_location(s)
+
+
+def fetch_pbs_official(from_d: date) -> List[Tournament]:
+    """
+    Scrapes PBS /events/ page and extracts tournaments per stop.
+
+    Important:
+      - PBS often shows:
+          "2026 Las Vegas" (stop header)
+          "18 Feb - 27 Feb, 2026" (stop date range)
+          then multiple tournaments with their own date ranges
+      - On stops where PBS hasn't populated the data, you'll see "No data was found."
+        and we won't fabricate tournaments.
+    """
+    out: List[Tournament] = []
+
+    html = http_get(PBS_EVENTS_URL)
+    soup = BeautifulSoup(html, "lxml")
+
+    main = soup.find("main") or soup
+    tokens = [norm_spaces(t) for t in main.stripped_strings if norm_spaces(t)]
+
+    in_upcoming = False
+    current_stop: Optional[str] = None
+    current_loc: Optional[str] = None
+    stop_date_consumed = False
+
+    last_cat: Optional[str] = None
+    last_title: Optional[str] = None
+
+    for tok in tokens:
+        low = tok.lower()
+
+        if low == "upcoming events":
+            in_upcoming = True
+            continue
+
+        if in_upcoming and "past events" in low:
+            break
+
+        if not in_upcoming:
+            continue
+
+        # Stop header like "2026 Las Vegas"
+        m_stop = re.match(r"^(20\d{2})\s+(.*)$", tok)
+        if m_stop:
+            current_stop = m_stop.group(2).strip()
+            current_loc = pbs_stop_to_location(current_stop)
+            stop_date_consumed = False
+            last_cat = None
+            last_title = None
+            continue
+
+        if not current_stop:
+            continue
+
+        # Noise / status lines
+        if "more info" in low:
+            continue
+        if "no data was found" in low:
+            last_title = None
+            continue
+        if "dates - to be confirmed" in low:
+            last_title = None
+            continue
+
+        # Category line
+        if tok in PBS_CATEGORIES:
+            last_cat = tok
+            continue
+
+        # Date range line
+        rng = try_parse_pbs_date_range(tok)
+        if rng:
+            start_d, end_d = rng
+
+            # The first range after the stop header is the "stop" range, not a tournament -> consume and ignore
+            if not stop_date_consumed:
+                stop_date_consumed = True
+                last_title = None
+                continue
+
+            # Otherwise it's a tournament date range -> create if we have a title
+            if last_title:
+                title = clean_title(last_title)
+                if is_upcoming_or_ongoing(start_d, end_d, from_d):
+                    out.append(
+                        Tournament(
+                            title=title,
+                            organizer="Predator/PBS",
+                            start=start_d,
+                            end=end_d,
+                            location=current_loc,
+                            tour=f"PBS ({last_cat})" if last_cat else "PBS",
+                            source="PBS events page",
+                            source_url=PBS_EVENTS_URL,
+                        )
+                    )
+            last_title = None
+            continue
+
+        # Likely tournament title
+        if low in {"events", "upcoming events", "upcoming event", "upcoming"}:
+            continue
+        if len(tok) < 2:
+            continue
+
+        last_title = tok
+
+    return out
+
+
+# =========================================================
+# PBS fallback (articles)
+# =========================================================
 def fetch_pbs_fallback(from_d: date) -> List[Tournament]:
     out: List[Tournament] = []
 
@@ -849,14 +1043,10 @@ def fetch_pbs_fallback(from_d: date) -> List[Tournament]:
     return out
 
 
-# -------------------------
+# =========================================================
 # Post-processing: dedup + cross-fill locations
-# -------------------------
+# =========================================================
 def choose_better(a: Tournament, b: Tournament) -> Tournament:
-    """
-    Prefer the one with higher precision location; otherwise keep a,
-    but merge missing location if b has it.
-    """
     pa = location_precision(a.location)
     pb = location_precision(b.location)
 
@@ -865,7 +1055,6 @@ def choose_better(a: Tournament, b: Tournament) -> Tournament:
     if pa > pb:
         return a
 
-    # same precision: merge missing if any
     if not a.location and b.location:
         return Tournament(**{**a.__dict__, "location": b.location})
     return a
@@ -883,7 +1072,6 @@ def dedup(tournaments: List[Tournament]) -> List[Tournament]:
 
 
 def title_tokens(s: str) -> set[str]:
-    # remove years and short tokens
     t = re.sub(r"\b20\d{2}\b", " ", s)
     toks = [x for x in slug(t).split("-") if len(x) >= 3]
     return set(toks)
@@ -898,10 +1086,6 @@ def jaccard(a: str, b: str) -> float:
 
 
 def cross_fill_locations(tournaments: List[Tournament]) -> List[Tournament]:
-    """
-    If an event has no location or only country-level, try to fill it from another
-    event with very similar dates and similar title where the location is more precise.
-    """
     by_start: Dict[date, List[Tournament]] = {}
     for t in tournaments:
         by_start.setdefault(t.start, []).append(t)
@@ -912,7 +1096,6 @@ def cross_fill_locations(tournaments: List[Tournament]) -> List[Tournament]:
             updated.append(t)
             continue
 
-        # candidates same start date (and close end date)
         cands = by_start.get(t.start, [])
         best_loc: Optional[str] = None
         best_score = 0.0
@@ -939,9 +1122,9 @@ def cross_fill_locations(tournaments: List[Tournament]) -> List[Tournament]:
     return updated
 
 
-# -------------------------
+# =========================================================
 # Export / Debug
-# -------------------------
+# =========================================================
 def export_excel(tournaments: List[Tournament], out_path: str) -> None:
     rows = []
     for t in tournaments:
@@ -971,16 +1154,16 @@ def print_missing_locations(tournaments: List[Tournament], limit: int = 30) -> N
         print(f"  - {t.start_iso} {t.organizer} | {t.title} | {t.source_url}")
 
 
-# -------------------------
+# =========================================================
 # CLI
-# -------------------------
+# =========================================================
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser()
     p.add_argument("--from", dest="from_date", default=None, help="YYYY-MM-DD (default=today)")
     p.add_argument("--years", type=int, default=2, help="EPBF years to fetch (current + next by default)")
     p.add_argument("--out", default="tournaments.xlsx", help="Output xlsx")
     p.add_argument("--wpa-enrich-limit", type=int, default=250, help="Max WPA event pages fetched for location")
-    p.add_argument("--matchroom-enrich-limit", type=int, default=250, help="Max Matchroom event pages fetched for location")
+    p.add_argument("--matchroom-enrich-limit", type=int, default=250, help="Max Matchroom pages fetched for location")
     p.add_argument("--epbf-enrich-limit", type=int, default=250, help="Max EPBF internal pages fetched for location")
     p.add_argument("--sleep", type=float, default=0.0, help="Optional sleep between page fetches (seconds)")
     return p.parse_args()
@@ -993,17 +1176,23 @@ def main() -> int:
 
     all_t: List[Tournament] = []
 
+    # WPA / Matchroom
     all_t.extend(fetch_wpa_ics(from_d, enrich_limit=max(0, args.wpa_enrich_limit), sleep_s=max(0.0, args.sleep)))
-    all_t.extend(fetch_matchroom(from_d, enrich_limit=max(0, args.matchroom_enrich_limit), sleep_s=max(0.0, args.sleep)))
+    all_t.extend(
+        fetch_matchroom(from_d, enrich_limit=max(0, args.matchroom_enrich_limit), sleep_s=max(0.0, args.sleep))
+    )
+
+    # PBS OFFICIAL (NEW) + fallback
+    all_t.extend(fetch_pbs_official(from_d))
     all_t.extend(fetch_pbs_fallback(from_d))
 
+    # EPBF years
     for y in range(from_d.year, from_d.year + years):
         try:
             all_t.extend(fetch_epbf(y, from_d, enrich_limit=max(0, args.epbf_enrich_limit), sleep_s=max(0.0, args.sleep)))
         except Exception as e:
             print(f"[WARN] EPBF {y} failed: {e}", file=sys.stderr)
 
-    # Dedup then cross-fill then sort
     all_t = dedup(all_t)
     all_t = cross_fill_locations(all_t)
     all_t = sorted(all_t, key=lambda x: (x.start, x.title))
