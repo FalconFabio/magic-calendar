@@ -3,7 +3,6 @@ name: Build calendars daily
 on:
   workflow_dispatch:
   schedule:
-    # Cron en UTC (ex: 02:30 UTC tous les jours)
     - cron: "30 2 * * *"
   push:
     branches: ["main"]
@@ -36,7 +35,8 @@ jobs:
 
       - name: Generate Excel
         run: |
-          python fetch_tournaments.py --from $(date +%F) --years 3 --out tournaments.xlsx
+          # Fenêtre par défaut du script (ex: 5 ans passé / 3 ans futur)
+          python fetch_tournaments.py --out tournaments.xlsx
 
       - name: Generate ICS
         run: |
@@ -51,7 +51,6 @@ jobs:
           cp tournaments.xlsx public/
           cp tournaments.ics public/
           cp tournaments-conflicts.ics public/
-          # mini index pour retrouver les liens facilement
           cat > public/index.html << 'HTML'
           <html><body>
           <h1>US Pool calendars</h1>

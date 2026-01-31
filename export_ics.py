@@ -4,7 +4,7 @@
 import argparse
 import hashlib
 from datetime import date, datetime, timedelta
-from typing import List, Dict, Tuple
+from typing import List, Dict
 
 import pandas as pd
 from icalendar import Calendar, Event
@@ -20,38 +20,43 @@ def parse_args():
     return p.parse_args()
 
 
-def stable_uid(organizer: str, start: str, end: str, title: str, uid_domain: str) -> str:
+def to_date(s: str) -> date:
+    return datetime.fromisoformat(str(s)).date()
+
+
+def stable_uid_fallback(organizer: str, start: str, end: str, title: str, uid_domain: str) -> str:
     raw = f"{organizer}|{start}|{end}|{title}".encode("utf-8")
     h = hashlib.sha1(raw).hexdigest()
     return f"{h}@{uid_domain}"
 
 
-def to_date(s: str) -> date:
-    # start_date/end_date are ISO yyyy-mm-dd
-    return datetime.fromisoformat(str(s)).date()
-
-
 def build_conflict_set(rows: List[Dict]) -> set:
     """
-    Returns a set of indices that are in conflict with at least one other event.
-    Overlap is inclusive on days (same day counts).
+    Conflict if inclusive overlap on days.
+    O(n log n) sweep using a heap.
     """
-    # sort by start
     indexed = list(enumerate(rows))
     indexed.sort(key=lambda x: (x[1]["start"], x[1]["end"], x[1]["title"]))
 
+    import heapq
+    heap = []  # (end_date, idx)
     conflict = set()
-    for i in range(len(indexed)):
-        idx_i, a = indexed[i]
-        for j in range(i + 1, len(indexed)):
-            idx_j, b = indexed[j]
-            # if next event starts after a ends, break (because sorted by start)
-            if b["start"] > a["end"]:
-                break
-            # overlap
-            if a["start"] <= b["end"] and b["start"] <= a["end"]:
-                conflict.add(idx_i)
-                conflict.add(idx_j)
+
+    for idx_i, ev in indexed:
+        start = ev["start"]
+        end = ev["end"]
+
+        # remove events that end strictly before start (inclusive overlap => < start is safe)
+        while heap and heap[0][0] < start:
+            heapq.heappop(heap)
+
+        if heap:
+            conflict.add(idx_i)
+            for _, other_idx in heap:
+                conflict.add(other_idx)
+
+        heapq.heappush(heap, (end, idx_i))
+
     return conflict
 
 
@@ -70,33 +75,48 @@ def add_event(cal: Calendar, row: Dict, uid_domain: str, mark_conflict: bool):
     start_d: date = row["start"]
     end_d: date = row["end"]
 
-    # all-day, DTEND is exclusive -> end + 1 day
     ev.add("dtstart", start_d)
-    ev.add("dtend", end_d + timedelta(days=1))
+    ev.add("dtend", end_d + timedelta(days=1))  # all-day, exclusive DTEND
 
     title = row["title"]
     if mark_conflict:
         title = f"⚠ {title}"
         ev.add("categories", "CONFLICT")
-
     ev.add("summary", title)
 
     if row.get("location"):
         ev.add("location", row["location"])
 
-    # Stable UID to avoid duplicates on refresh
-    ev.add("uid", stable_uid(row["organizer"], row["start_iso"], row["end_iso"], row["title"], uid_domain))
+    # Stable UID: prefer event_id (hash of URL from fetcher)
+    if row.get("event_id"):
+        ev.add("uid", f"{row['event_id']}@{uid_domain}")
+    else:
+        ev.add("uid", stable_uid_fallback(row["organizer"], row["start_iso"], row["end_iso"], row["title"], uid_domain))
 
-    # Useful description
-    desc_lines = [
-        f"Organizer: {row.get('organizer','')}",
-        f"Tour: {row.get('tour','')}",
-        f"Source: {row.get('source','')}",
-        f"URL: {row.get('source_url','')}",
-    ]
-    ev.add("description", "\n".join([l for l in desc_lines if l.strip()]))
+    desc_lines = []
 
-    # Also set URL if present
+    # extras
+    for label, key in [
+        ("Venue", "venue_name"),
+        ("Address", "venue_address"),
+        ("Prize fund", "prize_fund"),
+        ("Discipline", "discipline"),
+    ]:
+        v = row.get(key)
+        if v:
+            desc_lines.append(f"{label}: {v}")
+
+    desc_lines.extend(
+        [
+            f"Organizer: {row.get('organizer','')}",
+            f"Tour: {row.get('tour','')}",
+            f"Source: {row.get('source','')}",
+            f"URL: {row.get('source_url','')}",
+        ]
+    )
+
+    ev.add("description", "\n".join([l for l in desc_lines if l and str(l).strip()]))
+
     if row.get("source_url"):
         ev.add("url", row["source_url"])
 
@@ -107,7 +127,10 @@ def main():
     args = parse_args()
     df = pd.read_excel(args.xlsx)
 
-    # Normalize rows
+    def get_opt(r, col: str) -> str:
+        v = r.get(col)
+        return "" if (v is None or pd.isna(v)) else str(v).strip()
+
     rows: List[Dict] = []
     for _, r in df.iterrows():
         start = to_date(r["start_date"])
@@ -118,12 +141,17 @@ def main():
                 "end": end,
                 "start_iso": str(r["start_date"]),
                 "end_iso": str(r["end_date"]),
-                "title": str(r["title"]),
-                "organizer": str(r["organizer"]),
-                "tour": "" if pd.isna(r.get("tour")) else str(r.get("tour")),
-                "location": None if pd.isna(r.get("location")) else str(r.get("location")).strip(),
-                "source": "" if pd.isna(r.get("source")) else str(r.get("source")),
-                "source_url": "" if pd.isna(r.get("source_url")) else str(r.get("source_url")),
+                "title": get_opt(r, "title"),
+                "organizer": get_opt(r, "organizer"),
+                "tour": get_opt(r, "tour"),
+                "location": get_opt(r, "location") or None,
+                "venue_name": get_opt(r, "venue_name"),
+                "venue_address": get_opt(r, "venue_address"),
+                "prize_fund": get_opt(r, "prize_fund"),
+                "discipline": get_opt(r, "discipline"),
+                "event_id": get_opt(r, "event_id"),
+                "source": get_opt(r, "source"),
+                "source_url": get_opt(r, "source_url"),
             }
         )
 
