@@ -512,6 +512,32 @@ def _pbs_month_to_int(m: str) -> int:
     return MONTH_FULL[mm]
 
 
+PBS_MAX_RANGE_DAYS = 60
+
+
+def _pbs_safe_date(y: int, m: int, d: int) -> Optional[date]:
+    try:
+        return date(y, m, d)
+    except Exception:
+        return None
+
+
+def _pbs_reasonable_range(start: Optional[date], end: Optional[date]) -> Optional[Tuple[date, date]]:
+    if not start or not end:
+        return None
+    if end < start:
+        return None
+    if (end - start).days > PBS_MAX_RANGE_DAYS:
+        return None
+    return start, end
+
+
+def _pbs_next_month(y: int, m: int) -> Tuple[int, int]:
+    if m >= 12:
+        return y + 1, 1
+    return y, m + 1
+
+
 def parse_pbs_date_range(raw: str) -> Optional[Tuple[date, date]]:
     s = norm_spaces((raw or "").replace("–", "-").replace("—", "-"))
     if not s:
@@ -524,9 +550,28 @@ def parse_pbs_date_range(raw: str) -> Optional[Tuple[date, date]]:
         d2 = int(m.group("d2"))
         m1 = _pbs_month_to_int(m.group("m1"))
         m2 = _pbs_month_to_int(m.group("m2"))
-        start = date(y, m1, d1)
-        end = date(y, m2, d2)
-        return None if end < start else (start, end)
+        start = _pbs_safe_date(y, m1, d1)
+        end = _pbs_safe_date(y, m2, d2)
+        ok = _pbs_reasonable_range(start, end)
+        if ok:
+            return ok
+
+        # Year crossover (e.g., "Dec 29 - Jan 2, 2026")
+        if start and end and end < start:
+            start2 = _pbs_safe_date(y - 1, m1, d1)
+            end2 = _pbs_safe_date(y, m2, d2)
+            ok = _pbs_reasonable_range(start2, end2)
+            if ok:
+                return ok
+
+            # Swap months if they appear reversed (e.g., "March 27 - February 4, 2022")
+            if m1 != m2:
+                start3 = _pbs_safe_date(y, m2, d1)
+                end3 = _pbs_safe_date(y, m1, d2)
+                ok = _pbs_reasonable_range(start3, end3)
+                if ok:
+                    return ok
+        return None
 
     m = PBS_RANGE_RE_B.match(s)
     if m:
@@ -534,16 +579,40 @@ def parse_pbs_date_range(raw: str) -> Optional[Tuple[date, date]]:
         d1 = int(m.group("d1"))
         d2 = int(m.group("d2"))
         m1 = _pbs_month_to_int(m.group("m1"))
-        m2 = _pbs_month_to_int(m.group("m2") or m.group("m1"))
-        start = date(y, m1, d1)
-        end = date(y, m2, d2)
-        if end < start:
-            try_end = date(y, m1, d2)
-            if try_end >= start:
-                end = try_end
-            else:
-                return None
-        return start, end
+        m2_raw = m.group("m2")
+        m2 = _pbs_month_to_int(m2_raw or m.group("m1"))
+        start = _pbs_safe_date(y, m1, d1)
+        end = _pbs_safe_date(y, m2, d2)
+
+        ok = _pbs_reasonable_range(start, end)
+        if ok:
+            return ok
+
+        if start and end and end < start:
+            # If end month omitted, assume next month
+            if not m2_raw:
+                y2, m2n = _pbs_next_month(y, m1)
+                end2 = _pbs_safe_date(y2, m2n, d2)
+                ok = _pbs_reasonable_range(start, end2)
+                if ok:
+                    return ok
+
+            # Year crossover (e.g., "Dec 29 - Jan 2, 2026")
+            start2 = _pbs_safe_date(y - 1, m1, d1)
+            end2 = _pbs_safe_date(y, m2, d2)
+            ok = _pbs_reasonable_range(start2, end2)
+            if ok:
+                return ok
+
+            # Swap months if they appear reversed
+            if m1 != m2:
+                start3 = _pbs_safe_date(y, m2, d1)
+                end3 = _pbs_safe_date(y, m1, d2)
+                ok = _pbs_reasonable_range(start3, end3)
+                if ok:
+                    return ok
+
+        return None
 
     return None
 
