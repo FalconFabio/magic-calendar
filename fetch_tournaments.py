@@ -41,8 +41,8 @@ WPA_FEEDS = {
 EPBF_CALENDAR_YEAR_URL = "https://www.epbf.com/calendar/{year}/"
 MATCHROOM_SCHEDULE_URL = "https://matchroompool.com/schedule/"
 
-PBS_EVENTS_ARCHIVE_URL = "https://probilliardseries.com/events-archive/"
 PBS_BASES = ["https://probilliardseries.com", "https://www.probilliardseries.com"]
+PBS_LIST_PATHS = ["/events-archive/", "/events/"]
 
 DEFAULT_TIMEOUT = 25
 
@@ -1024,6 +1024,21 @@ def is_pbs_tournament_url(url: str) -> bool:
         return False
 
 
+def is_pbs_stop_url(url: str) -> bool:
+    """
+    Stop page:
+      /event/<stop>/
+    """
+    try:
+        p = urlparse(url)
+        if not _pbs_host_ok(p.netloc):
+            return False
+        parts = [x for x in (p.path or "").strip("/").split("/") if x]
+        return len(parts) == 2 and parts[0] == "event" and bool(parts[1])
+    except Exception:
+        return False
+
+
 def normalize_pbs_url(u: str) -> str:
     u = (u or "").strip()
     if not u:
@@ -1049,50 +1064,77 @@ def year_hint_from_url(u: str) -> Optional[int]:
     return int(m.group(1)) if m else None
 
 
-def collect_pbs_tournament_urls_from_archive() -> List[str]:
-    html = ""
-    last_err: Optional[Exception] = None
-
-    for base in PBS_BASES:
-        url = base.rstrip("/") + "/events-archive/"
-        try:
-            html = pbs_http_get(url)
-            break
-        except Exception as e:
-            last_err = e
-            continue
-
-    if not html:
-        raise RuntimeError(f"PBS archive fetch failed: {last_err}")
-
-    urls: List[str] = []
-    seen = set()
-
+def _collect_pbs_urls_from_html(
+    html: str, base_url: str, seen_tournaments: set, seen_stops: set
+) -> Tuple[List[str], List[str]]:
+    tournament_urls: List[str] = []
+    stop_urls: List[str] = []
     try:
         soup = BeautifulSoup(html, "lxml")
         for a in soup.select("a[href*='/event/']"):
             href = (a.get("href") or "").strip()
-            u = normalize_pbs_url(abs_url(href, "https://probilliardseries.com"))
-            if u and is_pbs_tournament_url(u) and u not in seen:
-                seen.add(u)
-                urls.append(u)
+            u = normalize_pbs_url(abs_url(href, base_url))
+            if not u:
+                continue
+            if is_pbs_tournament_url(u) and u not in seen_tournaments:
+                seen_tournaments.add(u)
+                tournament_urls.append(u)
+            elif is_pbs_stop_url(u) and u not in seen_stops:
+                seen_stops.add(u)
+                stop_urls.append(u)
     except Exception:
         pass
 
-    if not urls:
-        for m in PBS_URL_RE.finditer(html):
+    if not tournament_urls and not stop_urls:
+        for m in PBS_URL_RE.finditer(html or ""):
             u = normalize_pbs_url(m.group(0))
-            if u and is_pbs_tournament_url(u) and u not in seen:
-                seen.add(u)
-                urls.append(u)
+            if not u:
+                continue
+            if is_pbs_tournament_url(u) and u not in seen_tournaments:
+                seen_tournaments.add(u)
+                tournament_urls.append(u)
+            elif is_pbs_stop_url(u) and u not in seen_stops:
+                seen_stops.add(u)
+                stop_urls.append(u)
 
-    urls.sort()
-    print(f"[INFO] PBS archive: found {len(urls)} tournament urls", file=sys.stderr)
+    return tournament_urls, stop_urls
 
-    if not urls:
-        _pbs_dump_debug("archive_no_tournaments", PBS_EVENTS_ARCHIVE_URL, html)
 
-    return urls
+def collect_pbs_urls() -> Tuple[List[str], List[str]]:
+    tournament_urls: List[str] = []
+    stop_urls: List[str] = []
+    seen_tournaments = set()
+    seen_stops = set()
+    errors: List[str] = []
+
+    for base in PBS_BASES:
+        for path in PBS_LIST_PATHS:
+            url = base.rstrip("/") + path
+            try:
+                html = pbs_http_get(url)
+            except Exception as e:
+                errors.append(f"{url}: {e}")
+                continue
+
+            found_t, found_s = _collect_pbs_urls_from_html(html, base, seen_tournaments, seen_stops)
+            if found_t:
+                tournament_urls.extend(found_t)
+            if found_s:
+                stop_urls.extend(found_s)
+
+            if not found_t and not found_s:
+                _pbs_dump_debug("list_no_tournaments", url, html)
+
+    if not tournament_urls and not stop_urls and errors:
+        raise RuntimeError(f"PBS list fetch failed: {' | '.join(errors)}")
+
+    tournament_urls.sort()
+    stop_urls.sort()
+    print(
+        f"[INFO] PBS lists: found {len(tournament_urls)} tournament urls, {len(stop_urls)} stop urls",
+        file=sys.stderr,
+    )
+    return tournament_urls, stop_urls
 
 
 def parse_pbs_tournament_page_details(html: str) -> Dict[str, Any]:
@@ -1185,6 +1227,67 @@ def parse_pbs_tournament_page_details(html: str) -> Dict[str, Any]:
     }
 
 
+def parse_pbs_stop_page_details(html: str) -> Dict[str, Any]:
+    soup = BeautifulSoup(html, "lxml")
+    main = soup.find("main") or soup
+
+    h1 = main.find(["h1", "h2"])
+    title = clean_title(h1.get_text(" ", strip=True)) if h1 else ""
+
+    tokens = [norm_spaces(t) for t in main.stripped_strings if norm_spaces(t)]
+
+    # date range
+    start_d = end_d = None
+    for tok in tokens[:260]:
+        rng = parse_pbs_date_range(tok)
+        if rng:
+            start_d, end_d = rng
+            break
+
+    # location: JSON-LD first
+    loc = extract_location_from_jsonld(soup)
+    loc = normalize_location(loc) if loc else None
+
+    if not loc:
+        for tok in tokens[:140]:
+            if looks_like_date_text(tok):
+                continue
+            if "," not in tok:
+                continue
+            cand = normalize_location(tok)
+            if cand:
+                loc = cand
+                break
+
+    # venue details
+    venue_name = None
+    venue_addr = None
+    for i, tok in enumerate(tokens):
+        if tok.upper() == "VENUE DETAILS":
+            tail = tokens[i + 1 : i + 60]
+            for x in tail:
+                if x.upper() in {"RELATED NEWS", "OFFICIAL EQUIPMENT"}:
+                    break
+                if looks_like_date_text(x):
+                    continue
+                if not venue_name and len(x) >= 3 and not any(k in x.lower() for k in ["image", "watch", "show more"]):
+                    venue_name = x
+                    continue
+                if venue_name and not venue_addr and any(ch.isdigit() for ch in x) and "," in x:
+                    venue_addr = x
+                    break
+            break
+
+    return {
+        "title": title,
+        "start": start_d,
+        "end": end_d,
+        "location": loc,
+        "venue_name": venue_name,
+        "venue_address": venue_addr,
+    }
+
+
 @lru_cache(maxsize=128)
 def fetch_pbs_stop_details(stop_url: str) -> Tuple[Optional[str], Optional[str], Optional[str]]:
     """
@@ -1247,9 +1350,9 @@ def fetch_pbs(from_d: date, to_d: date, stop_enrich_limit: int, sleep_s: float) 
     out: List[Tournament] = []
 
     try:
-        tournament_urls = collect_pbs_tournament_urls_from_archive()
+        tournament_urls, stop_urls = collect_pbs_urls()
     except Exception as e:
-        print(f"[WARN] PBS archive failed: {e}", file=sys.stderr)
+        print(f"[WARN] PBS list fetch failed: {e}", file=sys.stderr)
         return out
 
     enrich_used = 0
@@ -1319,6 +1422,46 @@ def fetch_pbs(from_d: date, to_d: date, stop_enrich_limit: int, sleep_s: float) 
                 venue_address=venue_addr,
                 prize_fund=det.get("prize_fund"),
                 discipline=det.get("discipline"),
+            )
+        )
+
+    # Stop pages without tournaments (fallback)
+    stop_with_tournaments = {su for su in (stop_url_from_tournament_url(u) for u in tournament_urls) if su}
+    for stop_u in stop_urls:
+        if stop_u in stop_with_tournaments:
+            continue
+
+        try:
+            html = pbs_http_get(stop_u)
+        except Exception as e:
+            print(f"[WARN] PBS stop fetch failed: {stop_u}: {e}", file=sys.stderr)
+            continue
+
+        det = parse_pbs_stop_page_details(html)
+        title = (det.get("title") or "").strip()
+        start_d = det.get("start")
+        end_d = det.get("end")
+
+        if not title or start_d is None or end_d is None:
+            _pbs_dump_debug("stop_parse_failed", stop_u, html)
+            continue
+
+        if not in_window(start_d, end_d, from_d, to_d):
+            continue
+
+        out.append(
+            Tournament(
+                title=title,
+                organizer="Predator/PBS",
+                start=start_d,
+                end=end_d,
+                location=det.get("location"),
+                tour="PBS Stop",
+                source="PBS events list (stop page)",
+                source_url=stop_u,
+                event_id=stable_event_id_from_url(stop_u),
+                venue_name=det.get("venue_name"),
+                venue_address=det.get("venue_address"),
             )
         )
 
@@ -1471,6 +1614,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--years-future", type=int, default=3, help="Years forward from today (default window)")
 
     p.add_argument("--out", default="tournaments.xlsx", help="Output xlsx")
+    p.add_argument("--pbs-out", default="pbs.xlsx", help="Output PBS-only xlsx (always written)")
 
     p.add_argument("--wpa-enrich-limit", type=int, default=200, help="Max WPA event pages fetched for location")
     p.add_argument("--matchroom-enrich-limit", type=int, default=200, help="Max Matchroom pages fetched for location")
@@ -1478,6 +1622,7 @@ def parse_args() -> argparse.Namespace:
 
     # PBS stop enrichment budget (location/venue fallback)
     p.add_argument("--pbs-enrich-limit", type=int, default=200, help="Max PBS stop pages fetched for enrichment")
+    p.add_argument("--pbs-only", action="store_true", help="Fetch only PBS (skip WPA/Matchroom/EPBF)")
     p.add_argument("--sleep", type=float, default=0.0, help="Optional sleep between page fetches (seconds)")
     return p.parse_args()
 
@@ -1504,22 +1649,26 @@ def main() -> int:
     # PBS FIRST (priority)
     all_t.extend(fetch_pbs(from_d, to_d, stop_enrich_limit=max(0, args.pbs_enrich_limit), sleep_s=max(0.0, args.sleep)))
 
-    # WPA / Matchroom
-    all_t.extend(fetch_wpa_ics(from_d, to_d, enrich_limit=max(0, args.wpa_enrich_limit), sleep_s=max(0.0, args.sleep)))
-    all_t.extend(fetch_matchroom(from_d, to_d, enrich_limit=max(0, args.matchroom_enrich_limit), sleep_s=max(0.0, args.sleep)))
+    if not args.pbs_only:
+        # WPA / Matchroom
+        all_t.extend(fetch_wpa_ics(from_d, to_d, enrich_limit=max(0, args.wpa_enrich_limit), sleep_s=max(0.0, args.sleep)))
+        all_t.extend(fetch_matchroom(from_d, to_d, enrich_limit=max(0, args.matchroom_enrich_limit), sleep_s=max(0.0, args.sleep)))
 
-    # EPBF years in window
-    for y in range(from_d.year, to_d.year + 1):
-        try:
-            all_t.extend(fetch_epbf(y, from_d, to_d, enrich_limit=max(0, args.epbf_enrich_limit), sleep_s=max(0.0, args.sleep)))
-        except Exception as e:
-            print(f"[WARN] EPBF {y} failed: {e}", file=sys.stderr)
+        # EPBF years in window
+        for y in range(from_d.year, to_d.year + 1):
+            try:
+                all_t.extend(fetch_epbf(y, from_d, to_d, enrich_limit=max(0, args.epbf_enrich_limit), sleep_s=max(0.0, args.sleep)))
+            except Exception as e:
+                print(f"[WARN] EPBF {y} failed: {e}", file=sys.stderr)
 
     all_t = dedup(all_t)
     all_t = cross_fill_locations(all_t)
     all_t = sorted(all_t, key=lambda x: (x.start, x.organizer, x.title))
 
     export_excel(all_t, args.out)
+    if args.pbs_out:
+        pbs_only = [t for t in all_t if t.organizer == "Predator/PBS"]
+        export_excel(pbs_only, args.pbs_out)
 
     print(f"Window: {from_d.isoformat()} → {to_d.isoformat()}")
     print(f"Fetched {len(all_t)} events. First 25:")
@@ -1529,6 +1678,8 @@ def main() -> int:
 
     print_missing_locations(all_t, limit=40)
     print(f"\nWrote: {args.out}")
+    if args.pbs_out:
+        print(f"Wrote: {args.pbs_out}")
 
     pbs_count = sum(1 for t in all_t if t.organizer == "Predator/PBS")
     print(f"[INFO] PBS rows: {pbs_count}", file=sys.stderr)
