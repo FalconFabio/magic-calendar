@@ -947,6 +947,8 @@ PBS_TYPES = {
     "Junior",
 }
 
+PBS_DEBUG_DUMPS = False
+
 PBS_BLOCK_MARKERS = [
     "cloudflare",
     "checking your browser",
@@ -962,6 +964,8 @@ PBS_URL_RE = re.compile(r"https?://(?:www\.)?probilliardseries\.com/event/[^\"'\
 
 
 def _pbs_dump_debug(name: str, url: str, html: str) -> None:
+    if not PBS_DEBUG_DUMPS:
+        return
     try:
         stamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S_%f")
         short = slug(url)[:40] or "page"
