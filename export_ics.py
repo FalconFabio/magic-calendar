@@ -15,7 +15,11 @@ def parse_args():
     p.add_argument("--xlsx", required=True, help="Input tournaments.xlsx")
     p.add_argument("--ics", required=True, help="Output tournaments.ics")
     p.add_argument("--ics-conflicts", required=True, help="Output tournaments-conflicts.ics")
+    p.add_argument("--pbs-xlsx", default="pbs.xlsx", help="Input PBS-only xlsx (optional)")
+    p.add_argument("--pbs-ics", default=None, help="Output PBS-only ics (optional)")
+    p.add_argument("--pbs-ics-conflicts", default=None, help="Output PBS-only conflicts ics (optional)")
     p.add_argument("--calname", default="US Pool – Tournaments", help="Calendar display name")
+    p.add_argument("--pbs-calname", default=None, help="PBS calendar display name (optional)")
     p.add_argument("--uid-domain", default="uspool.local", help="UID suffix domain")
     return p.parse_args()
 
@@ -123,9 +127,8 @@ def add_event(cal: Calendar, row: Dict, uid_domain: str, mark_conflict: bool):
     cal.add_component(ev)
 
 
-def main():
-    args = parse_args()
-    df = pd.read_excel(args.xlsx)
+def load_rows(xlsx_path: str) -> List[Dict]:
+    df = pd.read_excel(xlsx_path)
 
     def get_opt(r, col: str) -> str:
         v = r.get(col)
@@ -154,22 +157,44 @@ def main():
                 "source_url": get_opt(r, "source_url"),
             }
         )
+    return rows
 
+
+def _default_conflicts_path(path: str) -> str:
+    if path.endswith(".ics"):
+        return path[:-4] + "-conflicts.ics"
+    return path + "-conflicts.ics"
+
+
+def write_ics(rows: List[Dict], calname: str, ics_path: str, conflicts_path: str, uid_domain: str):
     conflict_set = build_conflict_set(rows)
 
-    cal_all = make_calendar(args.calname)
-    cal_conf = make_calendar(args.calname + " (Conflicts)")
+    cal_all = make_calendar(calname)
+    cal_conf = make_calendar(calname + " (Conflicts)")
 
     for i, row in enumerate(rows):
-        add_event(cal_all, row, args.uid_domain, mark_conflict=(i in conflict_set))
+        add_event(cal_all, row, uid_domain, mark_conflict=(i in conflict_set))
         if i in conflict_set:
-            add_event(cal_conf, row, args.uid_domain, mark_conflict=True)
+            add_event(cal_conf, row, uid_domain, mark_conflict=True)
 
-    with open(args.ics, "wb") as f:
+    with open(ics_path, "wb") as f:
         f.write(cal_all.to_ical())
 
-    with open(args.ics_conflicts, "wb") as f:
+    with open(conflicts_path, "wb") as f:
         f.write(cal_conf.to_ical())
+
+
+def main():
+    args = parse_args()
+    rows = load_rows(args.xlsx)
+
+    write_ics(rows, args.calname, args.ics, args.ics_conflicts, args.uid_domain)
+
+    if args.pbs_ics:
+        pbs_rows = load_rows(args.pbs_xlsx)
+        pbs_calname = args.pbs_calname or (args.calname + " (PBS)")
+        pbs_conflicts = args.pbs_ics_conflicts or _default_conflicts_path(args.pbs_ics)
+        write_ics(pbs_rows, pbs_calname, args.pbs_ics, pbs_conflicts, args.uid_domain)
 
 
 if __name__ == "__main__":

@@ -133,6 +133,9 @@ jobs:
           python export_ics.py --xlsx tournaments.xlsx \
             --ics tournaments.ics \
             --ics-conflicts tournaments-conflicts.ics \
+            --pbs-xlsx pbs.xlsx \
+            --pbs-ics pbs.ics \
+            --pbs-ics-conflicts pbs-conflicts.ics \
             --uid-domain "${{ github.repository_owner }}.github.io"
 
       - name: Prepare Pages artifact
@@ -142,6 +145,9 @@ jobs:
           cp tournaments.xlsx public/
           cp tournaments.ics public/
           cp tournaments-conflicts.ics public/
+          cp pbs.xlsx public/
+          cp pbs.ics public/
+          cp pbs-conflicts.ics public/
 
           # Copier les dumps PBS si présents (super utile pour diagnostiquer les runs "night")
           ls -1 pbs_debug_*.html >/dev/null 2>&1 && cp pbs_debug_*.html public/debug/ || true
@@ -154,6 +160,9 @@ jobs:
             <li><a href="tournaments.ics">tournaments.ics</a></li>
             <li><a href="tournaments-conflicts.ics">tournaments-conflicts.ics</a></li>
             <li><a href="tournaments.xlsx">tournaments.xlsx</a></li>
+            <li><a href="pbs.ics">pbs.ics</a></li>
+            <li><a href="pbs-conflicts.ics">pbs-conflicts.ics</a></li>
+            <li><a href="pbs.xlsx">pbs.xlsx</a></li>
             <li><a href="debug/">debug/</a></li>
           </ul>
           </body></html>
