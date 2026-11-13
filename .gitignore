@@ -1,4 +1,3 @@
-cat > .gitignore <<'EOF'
 .venv/
 __pycache__/
 *.pyc
@@ -9,4 +8,4 @@ __pycache__/
 *.xlsx
 *.ics
 public/
-EOF
+sync-status.json

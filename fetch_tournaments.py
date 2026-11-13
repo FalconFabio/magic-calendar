@@ -11,10 +11,11 @@ import sys
 import time
 import unicodedata
 from dataclasses import dataclass
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
+from pathlib import Path
 from functools import lru_cache
 from typing import Any, Dict, Iterable, List, Optional, Tuple
-from urllib.parse import urlparse
+from urllib.parse import urlparse, urljoin
 
 import pandas as pd
 import requests
@@ -39,7 +40,10 @@ WPA_FEEDS = {
 }
 
 EPBF_CALENDAR_YEAR_URL = "https://www.epbf.com/calendar/{year}/"
-MATCHROOM_SCHEDULE_URL = "https://matchroompool.com/schedule/"
+MATCHROOM_SCHEDULE_URL = "https://worldnineballtour.com/schedule/"
+# Public calendar embedded by WPA at https://wpapool.com/calendar-2/.
+# The old WordPress iCal feed is no longer maintained for 2026 onwards.
+WPA_CALENDAR_PAGE = "https://wpapool.com/calendar-2/"
 
 PBS_BASES = ["https://probilliardseries.com", "https://www.probilliardseries.com"]
 PBS_LIST_PATHS = ["/events-archive/", "/events/"]
@@ -457,6 +461,14 @@ MONTH_FULL = {
 
 def parse_epbf_date_range(raw: str, year: int) -> Tuple[date, date]:
     s = norm_spaces(raw.lower().replace("–", "-"))
+    s = re.sub(r"\s+new date\s*$", "", s)
+    if re.fullmatch(r"\d{4}-\d{2}-\d{2}", s):
+        d = date.fromisoformat(s)
+        return d, d
+    m = re.fullmatch(r"(\d{1,2}) ([a-z]{3,4})", s)
+    if m:
+        d = date(year, MONTH_ABBR[m.group(2)], int(m.group(1)))
+        return d, d
     m = re.match(r"^(\d{1,2})-(\d{1,2}) ([a-z]{3,4})$", s)
     if m:
         d1, d2, mon = int(m.group(1)), int(m.group(2)), m.group(3)
@@ -620,6 +632,47 @@ def parse_pbs_date_range(raw: str) -> Optional[Tuple[date, date]]:
 # =========================================================
 # Fetchers: WPA
 # =========================================================
+def fetch_wpa_current(from_d: date, to_d: date) -> List[Tournament]:
+    soup = BeautifulSoup(http_get(WPA_CALENDAR_PAGE), "lxml")
+    calendar_url = None
+    for iframe in soup.select("iframe[src]"):
+        parsed = urlparse(iframe["src"])
+        if parsed.hostname == "teamup.com" and re.fullmatch(r"/ks[a-z0-9]+/?", parsed.path):
+            calendar_url = f"https://teamup.com{parsed.path.rstrip('/')}"
+            break
+    if not calendar_url:
+        raise ValueError("WPA public Teamup calendar not found")
+
+    out = []
+    # Request whole years: the ICS subscription omits events older than six months.
+    for year in range(max(2026, from_d.year), to_d.year + 1):
+        url = f"{calendar_url}/events?startDate={year}-01-01&endDate={year}-12-31"
+        payload = json.loads(http_get(url))
+        if not isinstance(payload.get("events"), list):
+            raise ValueError(f"Invalid WPA calendar response for {year}")
+        for item in payload["events"]:
+            title = clean_title(item.get("title", ""))
+            if not title or item.get("delete_dt"):
+                continue
+            start = datetime.fromisoformat(item["start_dt"]).date()
+            # Teamup JSON uses an inclusive end (23:59 for all-day events).
+            end = datetime.fromisoformat(item["end_dt"]).date()
+            if not in_window(start, end, from_d, to_d):
+                continue
+            detail_url = f"{calendar_url}/events/{item['id']}"
+            custom = item.get("custom") or {}
+            discipline = custom.get("discipline") or []
+            if isinstance(discipline, list):
+                discipline = ", ".join(d.replace("_", "-") for d in discipline)
+            out.append(Tournament(
+                title=title, organizer="WPA", start=start, end=end,
+                location=normalize_location(item.get("location")), tour="WPA Calendar",
+                source="WPA official calendar (Teamup)", source_url=detail_url,
+                event_id=stable_event_id_from_url(detail_url), discipline=discipline or None,
+            ))
+    return dedup(out)
+
+
 def fetch_wpa_ics(from_d: date, to_d: date, enrich_limit: int, sleep_s: float) -> List[Tournament]:
     out: List[Tournament] = []
     enrich_count = 0
@@ -772,20 +825,23 @@ def fetch_matchroom(from_d: date, to_d: date, enrich_limit: int, sleep_s: float)
             continue
 
         event_type = None
-        m2 = re.match(r"^(Ranking|Major|Non-Ranking|Junior|Blue Ribbon)\s+(.*)$", rest)
+        m2 = re.match(r"^(Ranking|Major|Non-Ranking|Junior|Blue Ribbon|Invitational)\s+(.*)$", rest)
         if m2:
             event_type = m2.group(1)
             title = clean_title(m2.group(2).strip())
         else:
             title = clean_title(rest)
 
-        href = a.get("href") or MATCHROOM_SCHEDULE_URL
-        if not href.startswith("http"):
-            href = f"https://matchroompool.com{href}"
+        title_el = a.select_one(".title")
+        if title_el:
+            title = clean_title(title_el.get_text(" ", strip=True))
+        href = urljoin(MATCHROOM_SCHEDULE_URL, a.get("href") or MATCHROOM_SCHEDULE_URL)
 
-        loc: Optional[str] = None
+        venue_el = a.select_one(".venue")
+        loc = normalize_location(venue_el.get_text(" ", strip=True)) if venue_el else None
+        prize_match = re.search(r"Prize Fund:\s*(.+)$", txt)
 
-        if enrich_count < enrich_limit:
+        if not loc and enrich_count < enrich_limit:
             cand = fetch_location_from_page(href)
             cand = normalize_location(cand)
             enrich_count += 1
@@ -810,7 +866,9 @@ def fetch_matchroom(from_d: date, to_d: date, enrich_limit: int, sleep_s: float)
                 tour=f"WNT ({event_type})" if event_type else "WNT",
                 source="Matchroom schedule",
                 source_url=href,
-                event_id=stable_event_id_from_url(href),
+                # Preserve subscriber UIDs across Matchroom's domain migration.
+                event_id=stable_event_id_from_url(href.replace("https://worldnineballtour.com/", "https://matchroompool.com/")),
+                prize_fund=prize_match.group(1).strip() if prize_match else None,
             )
         )
 
@@ -932,7 +990,14 @@ def fetch_epbf(year: int, from_d: date, to_d: date, enrich_limit: int, sleep_s: 
                 )
             )
 
-    return out
+    # Different youth stops can have the same title and date (e.g. Tallinn/Sofia).
+    by_id: Dict[str, set] = {}
+    for t in out:
+        by_id.setdefault(t.event_id, set()).add(t.location)
+    return [
+        Tournament(**{**t.__dict__, "event_id": stable_event_id_from_url(f"{t.event_id}#{t.location}")})
+        if len(by_id[t.event_id]) > 1 else t for t in out
+    ]
 
 
 # =========================================================
@@ -1356,8 +1421,7 @@ def fetch_pbs(from_d: date, to_d: date, stop_enrich_limit: int, sleep_s: float) 
     try:
         tournament_urls, stop_urls = collect_pbs_urls()
     except Exception as e:
-        print(f"[WARN] PBS list fetch failed: {e}", file=sys.stderr)
-        return out
+        raise RuntimeError(f"PBS list fetch failed: {e}") from e
 
     enrich_used = 0
 
@@ -1571,6 +1635,12 @@ def cross_fill_locations(tournaments: List[Tournament]) -> List[Tournament]:
 # =========================================================
 # Export
 # =========================================================
+EXPORT_COLUMNS = [
+    "start_date", "end_date", "title", "organizer", "tour", "location",
+    "venue_name", "venue_address", "prize_fund", "discipline", "event_id", "source", "source_url",
+]
+
+
 def export_excel(tournaments: List[Tournament], out_path: str) -> None:
     rows = []
     for t in tournaments:
@@ -1591,7 +1661,7 @@ def export_excel(tournaments: List[Tournament], out_path: str) -> None:
                 "source_url": t.source_url,
             }
         )
-    df = pd.DataFrame(rows).sort_values(["start_date", "organizer", "title"])
+    df = pd.DataFrame(rows, columns=EXPORT_COLUMNS).sort_values(["start_date", "organizer", "title"])
     df.to_excel(out_path, index=False)
 
 
@@ -1603,6 +1673,28 @@ def print_missing_locations(tournaments: List[Tournament], limit: int = 30) -> N
     print(f"⚠️ Missing locations: {len(missing)} (showing {min(limit, len(missing))})")
     for t in missing[:limit]:
         print(f"  - {t.start_iso} {t.organizer} | {t.title} | {t.source_url}")
+
+
+def restore_missing_sources(tournaments, previous_path, from_d, to_d, organizers=None):
+    """Reuse a previous source/year only when its fresh collection is empty."""
+    if not previous_path or not Path(previous_path).exists():
+        return tournaments, []
+    previous = pd.read_excel(previous_path).fillna("")
+    missing_columns = set(EXPORT_COLUMNS) - set(previous.columns)
+    if missing_columns:
+        raise ValueError(f"Previous workbook lacks columns: {sorted(missing_columns)}")
+    present = {(t.organizer, t.start.year) for t in tournaments}
+    restored = []
+    for row in previous.to_dict("records"):
+        if organizers is not None and row["organizer"] not in organizers:
+            continue
+        start = date.fromisoformat(str(row["start_date"])[:10])
+        end = date.fromisoformat(str(row["end_date"])[:10])
+        if (row["organizer"], start.year) in present or not in_window(start, end, from_d, to_d):
+            continue
+        values = {k: row[k] or None for k in EXPORT_COLUMNS if k not in {"start_date", "end_date"}}
+        restored.append(Tournament(start=start, end=end, **values))
+    return tournaments + restored, restored
 
 
 # =========================================================
@@ -1619,6 +1711,8 @@ def parse_args() -> argparse.Namespace:
 
     p.add_argument("--out", default="tournaments.xlsx", help="Output xlsx")
     p.add_argument("--pbs-out", default="pbs.xlsx", help="Output PBS-only xlsx (always written)")
+    p.add_argument("--previous", help="Previously published workbook for source outages")
+    p.add_argument("--report", default="sync-status.json", help="Machine-readable collection status")
 
     p.add_argument("--wpa-enrich-limit", type=int, default=200, help="Max WPA event pages fetched for location")
     p.add_argument("--matchroom-enrich-limit", type=int, default=200, help="Max Matchroom pages fetched for location")
@@ -1650,24 +1744,62 @@ def main() -> int:
 
     all_t: List[Tournament] = []
 
-    # PBS FIRST (priority)
-    all_t.extend(fetch_pbs(from_d, to_d, stop_enrich_limit=max(0, args.pbs_enrich_limit), sleep_s=max(0.0, args.sleep)))
+    errors = []
+
+    def collect(label, fetch):
+        try:
+            events = fetch()
+            all_t.extend(events)
+            print(f"[INFO] {label}: {len(events)} events", flush=True)
+        except Exception as exc:
+            errors.append(f"{label}: {exc}")
+            print(f"[WARN] {label}: {exc}", file=sys.stderr)
+
+    # Keep collecting other sources if one provider is unavailable.
+    collect("Predator/PBS", lambda: fetch_pbs(from_d, to_d, stop_enrich_limit=max(0, args.pbs_enrich_limit), sleep_s=max(0.0, args.sleep)))
 
     if not args.pbs_only:
         # WPA / Matchroom
-        all_t.extend(fetch_wpa_ics(from_d, to_d, enrich_limit=max(0, args.wpa_enrich_limit), sleep_s=max(0.0, args.sleep)))
-        all_t.extend(fetch_matchroom(from_d, to_d, enrich_limit=max(0, args.matchroom_enrich_limit), sleep_s=max(0.0, args.sleep)))
+        if from_d.year < 2026:
+            collect("WPA archive", lambda: fetch_wpa_ics(from_d, min(to_d, date(2025, 12, 31)), enrich_limit=max(0, args.wpa_enrich_limit), sleep_s=max(0.0, args.sleep)))
+        if to_d.year >= 2026:
+            collect("WPA current", lambda: fetch_wpa_current(from_d, to_d))
+        collect("Matchroom", lambda: fetch_matchroom(from_d, to_d, enrich_limit=max(0, args.matchroom_enrich_limit), sleep_s=max(0.0, args.sleep)))
 
         # EPBF years in window
         for y in range(from_d.year, to_d.year + 1):
-            try:
-                all_t.extend(fetch_epbf(y, from_d, to_d, enrich_limit=max(0, args.epbf_enrich_limit), sleep_s=max(0.0, args.sleep)))
-            except Exception as e:
-                print(f"[WARN] EPBF {y} failed: {e}", file=sys.stderr)
+            collect(f"EPBF {y}", lambda: fetch_epbf(y, from_d, to_d, enrich_limit=max(0, args.epbf_enrich_limit), sleep_s=max(0.0, args.sleep)))
+
+    fresh = dedup(all_t)
+    if not fresh:
+        raise RuntimeError("No fresh events from any source; refusing to publish")
+    expected = {"Predator/PBS"} if args.pbs_only else {"Predator/PBS", "WPA", "Matchroom", "EPBF"}
+    all_t, restored = restore_missing_sources(fresh, args.previous, from_d, to_d, expected)
+    if from_d <= today <= to_d:
+        missing = expected - {t.organizer for t in all_t if t.start.year == today.year}
+        if missing:
+            raise RuntimeError(f"No current-year data or backup for {sorted(missing)}; refusing to publish")
 
     all_t = dedup(all_t)
     all_t = cross_fill_locations(all_t)
     all_t = sorted(all_t, key=lambda x: (x.start, x.organizer, x.title))
+
+    def counts(events):
+        result = {}
+        for t in events:
+            key = f"{t.organizer} {t.start.year}"
+            result[key] = result.get(key, 0) + 1
+        return dict(sorted(result.items()))
+
+    report = {
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "window": {"from": from_d.isoformat(), "to": to_d.isoformat()},
+        "fresh": counts(fresh), "reused_previous": counts(restored),
+        "published": counts(all_t), "errors": errors,
+    }
+    Path(args.report).write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
+    if restored:
+        print(f"[WARN] Reused previous data (not freshly verified): {counts(restored)}", file=sys.stderr)
 
     export_excel(all_t, args.out)
     if args.pbs_out:

@@ -3,7 +3,7 @@
 
 import argparse
 import hashlib
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 from typing import List, Dict
 
 import pandas as pd
@@ -70,11 +70,14 @@ def make_calendar(calname: str) -> Calendar:
     cal.add("version", "2.0")
     cal.add("calscale", "GREGORIAN")
     cal.add("x-wr-calname", calname)
+    cal.add("refresh-interval", timedelta(hours=6))
+    cal.add("x-published-ttl", "PT6H")
     return cal
 
 
 def add_event(cal: Calendar, row: Dict, uid_domain: str, mark_conflict: bool):
     ev = Event()
+    ev.add("dtstamp", datetime.now(timezone.utc))
 
     start_d: date = row["start"]
     end_d: date = row["end"]
@@ -138,6 +141,8 @@ def load_rows(xlsx_path: str) -> List[Dict]:
     for _, r in df.iterrows():
         start = to_date(r["start_date"])
         end = to_date(r["end_date"])
+        if end < start or not get_opt(r, "title"):
+            raise ValueError(f"Invalid event: {r.to_dict()}")
         rows.append(
             {
                 "start": start,
@@ -191,7 +196,8 @@ def main():
     write_ics(rows, args.calname, args.ics, args.ics_conflicts, args.uid_domain)
 
     if args.pbs_ics:
-        pbs_rows = load_rows(args.pbs_xlsx)
+        # Always derive both feeds from the same reconciled dataset.
+        pbs_rows = [row for row in rows if row["organizer"] == "Predator/PBS"]
         pbs_calname = args.pbs_calname or (args.calname + " (PBS)")
         pbs_conflicts = args.pbs_ics_conflicts or _default_conflicts_path(args.pbs_ics)
         write_ics(pbs_rows, pbs_calname, args.pbs_ics, pbs_conflicts, args.uid_domain)

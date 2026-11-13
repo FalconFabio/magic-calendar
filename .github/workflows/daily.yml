@@ -20,6 +20,7 @@ concurrency:
 jobs:
   build:
     runs-on: ubuntu-latest
+    timeout-minutes: 40
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -34,99 +35,32 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      - name: Debug PBS connectivity (logs)
-        run: |
-          echo "event_name=$GITHUB_EVENT_NAME"
-          echo -n "egress_ip="; curl -s https://api.ipify.org || true; echo
-          echo "PBS archive headers (first 20 lines):"
-          curl -sI https://probilliardseries.com/events-archive/ | head -n 20 || true
+      - name: Test calendar pipeline
+        run: python -m unittest discover -s tests -v
 
-      - name: Download previous prod xlsx (best effort)
+      - name: Download previous published data
+        env:
+          PAGES_BASE: https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}
         run: |
           mkdir -p prev
-          PAGES_BASE="https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}"
-          echo "Trying to download previous: $PAGES_BASE/tournaments.xlsx"
-          curl -fsSL -o prev/tournaments.xlsx "$PAGES_BASE/tournaments.xlsx" || true
-          ls -lh prev || true
+          curl --retry 3 --max-time 60 -fsSL -o prev/tournaments.xlsx "$PAGES_BASE/tournaments.xlsx" || rm -f prev/tournaments.xlsx
 
-      - name: Generate Excel
-        run: |
-          # Fenêtre par défaut dans ton script (years-past/years-future)
-          # Tu peux ajuster ici si tu veux une fenêtre prod différente
-          python fetch_tournaments.py --out tournaments.xlsx
+      - name: Generate and reconcile calendars
+        run: python -u fetch_tournaments.py --out tournaments.xlsx --previous prev/tournaments.xlsx --report sync-status.json
 
-      - name: Keep previous PBS if missing
+      - name: Collection summary
         run: |
-          python - << 'PY'
+          python - << 'PYCODE'
+          import json
           import os
-          import pandas as pd
-
-          cur_path = "tournaments.xlsx"
-          prev_path = "prev/tournaments.xlsx"
-
-          cur = pd.read_excel(cur_path)
-          if "organizer" not in cur.columns:
-            raise SystemExit("Current xlsx has no 'organizer' column")
-
-          cur_pbs = cur[cur["organizer"]=="Predator/PBS"]
-          if len(cur_pbs) > 0:
-            print(f"[OK] PBS present in current: {len(cur_pbs)} rows")
-            raise SystemExit(0)
-
-          print("[WARN] PBS missing in current xlsx")
-
-          if not os.path.exists(prev_path):
-            print("[WARN] No previous xlsx available. Keeping current as-is.")
-            raise SystemExit(0)
-
-          prev = pd.read_excel(prev_path)
-          if "organizer" not in prev.columns:
-            print("[WARN] Previous xlsx has no 'organizer' column. Keeping current as-is.")
-            raise SystemExit(0)
-
-          prev_pbs = prev[prev["organizer"]=="Predator/PBS"]
-          if len(prev_pbs) == 0:
-            print("[WARN] Previous xlsx also has 0 PBS rows. Keeping current as-is.")
-            raise SystemExit(0)
-
-          # Align columns between current and previous PBS slice
-          for c in prev_pbs.columns:
-            if c not in cur.columns:
-              cur[c] = ""
-          for c in cur.columns:
-            if c not in prev_pbs.columns:
-              prev_pbs[c] = ""
-
-          merged = pd.concat([cur, prev_pbs[cur.columns]], ignore_index=True)
-
-          # Dedupe
-          if "event_id" in merged.columns:
-            merged["event_id"] = merged["event_id"].fillna("").astype(str)
-            merged = merged[merged["event_id"].str.strip() != ""].append(
-              merged[merged["event_id"].str.strip() == ""], ignore_index=True
-            )
-            merged = merged.drop_duplicates(subset=["event_id"], keep="first")
-          else:
-            keys = [c for c in ["start_date","title","organizer"] if c in merged.columns]
-            if keys:
-              merged = merged.drop_duplicates(subset=keys, keep="first")
-
-          sort_cols = [c for c in ["start_date","organizer","title"] if c in merged.columns]
-          if sort_cols:
-            merged = merged.sort_values(sort_cols, kind="mergesort")
-
-          merged.to_excel(cur_path, index=False)
-          print(f"[OK] Reused PBS rows from previous: {len(prev_pbs)}")
-          PY
-
-      - name: Summary (organizer counts)
-        run: |
-          python - << 'PY'
-          import pandas as pd
-          df = pd.read_excel("tournaments.xlsx")
-          print(df["organizer"].value_counts())
-          print("PBS rows:", (df["organizer"]=="Predator/PBS").sum())
-          PY
+          from pathlib import Path
+          report = json.loads(Path("sync-status.json").read_text())
+          print(json.dumps(report, indent=2))
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as summary:
+              summary.write("## Calendar collection\n\n```json\n" + json.dumps(report, indent=2) + "\n```\n")
+          if report["reused_previous"]:
+              print("::warning::Some source/year groups use previous data. See sync-status.json.")
+          PYCODE
 
       - name: Generate ICS
         run: |
@@ -142,6 +76,7 @@ jobs:
         run: |
           mkdir -p public
           mkdir -p public/debug
+          cp sync-status.json public/
           cp tournaments.xlsx public/
           cp tournaments.ics public/
           cp tournaments-conflicts.ics public/
@@ -163,7 +98,7 @@ jobs:
             <li><a href="pbs.ics">pbs.ics</a></li>
             <li><a href="pbs-conflicts.ics">pbs-conflicts.ics</a></li>
             <li><a href="pbs.xlsx">pbs.xlsx</a></li>
-            <li><a href="debug/">debug/</a></li>
+            <li><a href="sync-status.json">Dernière synchronisation et état des sources</a></li>
           </ul>
           </body></html>
           HTML
@@ -179,3 +114,25 @@ jobs:
     steps:
       - name: Deploy to GitHub Pages
         uses: actions/deploy-pages@v4
+
+  keepalive:
+    needs: deploy
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - name: Record monthly successful publication
+        # Monthly repository activity prevents the 60-day inactivity shutdown.
+        # A GITHUB_TOKEN push does not trigger another workflow run.
+        run: |
+          month="$(date -u +%Y-%m)"
+          if [ -f .github/calendar-heartbeat ] && [ "$(cat .github/calendar-heartbeat)" = "$month" ]; then
+            exit 0
+          fi
+          echo "$month" > .github/calendar-heartbeat
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add .github/calendar-heartbeat
+          git commit -m "Record successful calendar publication for $month"
+          git push
