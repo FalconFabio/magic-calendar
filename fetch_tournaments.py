@@ -1712,6 +1712,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--out", default="tournaments.xlsx", help="Output xlsx")
     p.add_argument("--pbs-out", default="pbs.xlsx", help="Output PBS-only xlsx (always written)")
     p.add_argument("--previous", help="Previously published workbook for source outages")
+    p.add_argument("--refresh-from", help="Refresh from this date when a previous workbook is available; preserve older archives")
     p.add_argument("--report", default="sync-status.json", help="Machine-readable collection status")
 
     p.add_argument("--wpa-enrich-limit", type=int, default=200, help="Max WPA event pages fetched for location")
@@ -1742,6 +1743,12 @@ def main() -> int:
     if to_d < from_d:
         raise SystemExit("--to must be >= --from (or adjust --years-past/--years-future)")
 
+    refresh_d = from_d
+    if args.refresh_from and args.previous and Path(args.previous).exists():
+        refresh_d = max(from_d, date.fromisoformat(args.refresh_from))
+        if refresh_d > to_d:
+            raise SystemExit("--refresh-from must be <= --to")
+
     all_t: List[Tournament] = []
 
     errors = []
@@ -1756,19 +1763,19 @@ def main() -> int:
             print(f"[WARN] {label}: {exc}", file=sys.stderr)
 
     # Keep collecting other sources if one provider is unavailable.
-    collect("Predator/PBS", lambda: fetch_pbs(from_d, to_d, stop_enrich_limit=max(0, args.pbs_enrich_limit), sleep_s=max(0.0, args.sleep)))
+    collect("Predator/PBS", lambda: fetch_pbs(refresh_d, to_d, stop_enrich_limit=max(0, args.pbs_enrich_limit), sleep_s=max(0.0, args.sleep)))
 
     if not args.pbs_only:
         # WPA / Matchroom
-        if from_d.year < 2026:
-            collect("WPA archive", lambda: fetch_wpa_ics(from_d, min(to_d, date(2025, 12, 31)), enrich_limit=max(0, args.wpa_enrich_limit), sleep_s=max(0.0, args.sleep)))
+        if refresh_d.year < 2026:
+            collect("WPA archive", lambda: fetch_wpa_ics(refresh_d, min(to_d, date(2025, 12, 31)), enrich_limit=max(0, args.wpa_enrich_limit), sleep_s=max(0.0, args.sleep)))
         if to_d.year >= 2026:
-            collect("WPA current", lambda: fetch_wpa_current(from_d, to_d))
-        collect("Matchroom", lambda: fetch_matchroom(from_d, to_d, enrich_limit=max(0, args.matchroom_enrich_limit), sleep_s=max(0.0, args.sleep)))
+            collect("WPA current", lambda: fetch_wpa_current(refresh_d, to_d))
+        collect("Matchroom", lambda: fetch_matchroom(refresh_d, to_d, enrich_limit=max(0, args.matchroom_enrich_limit), sleep_s=max(0.0, args.sleep)))
 
         # EPBF years in window
-        for y in range(from_d.year, to_d.year + 1):
-            collect(f"EPBF {y}", lambda: fetch_epbf(y, from_d, to_d, enrich_limit=max(0, args.epbf_enrich_limit), sleep_s=max(0.0, args.sleep)))
+        for y in range(refresh_d.year, to_d.year + 1):
+            collect(f"EPBF {y}", lambda: fetch_epbf(y, refresh_d, to_d, enrich_limit=max(0, args.epbf_enrich_limit), sleep_s=max(0.0, args.sleep)))
 
     fresh = dedup(all_t)
     if not fresh:
@@ -1794,12 +1801,17 @@ def main() -> int:
     report = {
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "window": {"from": from_d.isoformat(), "to": to_d.isoformat()},
-        "fresh": counts(fresh), "reused_previous": counts(restored),
+        "refresh_from": refresh_d.isoformat(),
+        "fresh": counts(fresh),
+        "preserved_archive": counts([t for t in restored if t.end < refresh_d]),
+        "reused_previous": counts([t for t in restored if t.end >= refresh_d]),
         "published": counts(all_t), "errors": errors,
     }
     Path(args.report).write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
-    if restored:
-        print(f"[WARN] Reused previous data (not freshly verified): {counts(restored)}", file=sys.stderr)
+    if report["preserved_archive"]:
+        print(f"[INFO] Preserved archive: {report['preserved_archive']}")
+    if report["reused_previous"]:
+        print(f"[WARN] Reused previous data (not freshly verified): {report['reused_previous']}", file=sys.stderr)
 
     export_excel(all_t, args.out)
     if args.pbs_out:

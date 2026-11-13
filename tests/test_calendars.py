@@ -3,6 +3,7 @@ import tempfile
 import unittest
 from datetime import date
 from pathlib import Path
+from contextlib import ExitStack
 from unittest.mock import patch
 
 import pandas as pd
@@ -98,6 +99,32 @@ class CalendarRegressionTests(unittest.TestCase):
         with patch.object(fetcher, "fetch_pbs", return_value=[]), patch("sys.argv", ["fetch_tournaments.py", "--pbs-only"]):
             with self.assertRaisesRegex(RuntimeError, "No fresh events"):
                 fetcher.main()
+
+    def test_current_refresh_preserves_archives(self):
+        year = max(2026, date.today().year)
+        with tempfile.TemporaryDirectory() as tmp, ExitStack() as stack:
+            root = Path(tmp)
+            previous = root / "previous.xlsx"
+            fetcher.export_excel([self.event("EPBF", event_id="archive", year=year-1)], str(previous))
+            providers = {"fetch_pbs": "Predator/PBS", "fetch_wpa_current": "WPA",
+                         "fetch_matchroom": "Matchroom", "fetch_epbf": "EPBF"}
+            mocked = {}
+            for function, organizer in providers.items():
+                mocked[function] = stack.enter_context(patch.object(fetcher, function,
+                    return_value=[self.event(organizer, event_id=organizer, year=year)]))
+            archive = stack.enter_context(patch.object(fetcher, "fetch_wpa_ics"))
+            stack.enter_context(patch("sys.argv", ["fetch_tournaments.py",
+                "--from", f"{year-1}-01-01", "--to", f"{year}-12-31",
+                "--refresh-from", f"{year}-01-01", "--previous", str(previous),
+                "--out", str(root / "all.xlsx"), "--pbs-out", str(root / "pbs.xlsx"),
+                "--report", str(root / "status.json")]))
+            self.assertEqual(fetcher.main(), 0)
+            archive.assert_not_called()
+            self.assertEqual(mocked["fetch_wpa_current"].call_args.args[0], date(year, 1, 1))
+            report = json.loads((root / "status.json").read_text())
+            self.assertEqual(report["preserved_archive"], {f"EPBF {year-1}": 1})
+            self.assertEqual(report["reused_previous"], {})
+            self.assertEqual(len(pd.read_excel(root / "all.xlsx")), 5)
 
     def test_invalid_dates_are_rejected_before_ics(self):
         with tempfile.TemporaryDirectory() as tmp:

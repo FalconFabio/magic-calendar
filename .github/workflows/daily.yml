@@ -46,7 +46,7 @@ jobs:
           curl --retry 3 --max-time 60 -fsSL -o prev/tournaments.xlsx "$PAGES_BASE/tournaments.xlsx" || rm -f prev/tournaments.xlsx
 
       - name: Generate and reconcile calendars
-        run: python -u fetch_tournaments.py --out tournaments.xlsx --previous prev/tournaments.xlsx --report sync-status.json
+        run: python -u fetch_tournaments.py --out tournaments.xlsx --previous prev/tournaments.xlsx --refresh-from "$(date -u +%Y)-01-01" --report sync-status.json
 
       - name: Collection summary
         run: |
