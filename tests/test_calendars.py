@@ -86,6 +86,7 @@ class CalendarRegressionTests(unittest.TestCase):
             with patch("sys.argv", argv):
                 exporter.main()
             all_events = Calendar.from_ical((root / "all.ics").read_bytes()).walk("VEVENT")
+            self.assertIn(b"REFRESH-INTERVAL;VALUE=DURATION:PT6H", (root / "all.ics").read_bytes())
             pbs_events = Calendar.from_ical((root / "pbs.ics").read_bytes()).walk("VEVENT")
             self.assertEqual(len(all_events), 2)
             self.assertEqual(len(pbs_events), 1)

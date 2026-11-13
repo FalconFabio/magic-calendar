@@ -7,7 +7,7 @@ from datetime import date, datetime, timedelta, timezone
 from typing import List, Dict
 
 import pandas as pd
-from icalendar import Calendar, Event
+from icalendar import Calendar, Event, vDuration
 
 
 def parse_args():
@@ -70,7 +70,7 @@ def make_calendar(calname: str) -> Calendar:
     cal.add("version", "2.0")
     cal.add("calscale", "GREGORIAN")
     cal.add("x-wr-calname", calname)
-    cal.add("refresh-interval", timedelta(hours=6))
+    cal.add("refresh-interval", vDuration(timedelta(hours=6)), parameters={"VALUE": "DURATION"})
     cal.add("x-published-ttl", "PT6H")
     return cal
 
