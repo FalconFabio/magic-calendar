@@ -168,10 +168,10 @@ def source_issues(errors, previous, today):
         match = re.fullmatch(r"EPBF (\d{4})", label)
         if match and int(match.group(1)) > today.year:
             announced = any(r["organizer"] == "EPBF" and str(r["start_date"]).startswith(match.group(1)) for r in previous)
-            if not announced:
+            if not announced and "404" in error:
                 continue  # A calendar for an unannounced future season may not exist yet.
         if label not in {issue["source"] for issue in issues}:
-            issues.append({"source": label, "message": f"{label} : collecte indisponible ; données précédentes conservées."})
+            issues.append({"source": label, "message": f"{label} : collecte indisponible ou incomplète ; données précédentes conservées.", "detail": error})
     return issues
 
 
@@ -250,6 +250,13 @@ def write_status_text(report, path):
              f"Doublons regroupés : {calendar.get('duplicates_removed', 0)}",
              f"Entrées sources archivées : {report.get('archive', {}).get('completed_events', 0)}", "", "État des sources"]
     lines += [i["message"] for i in monitoring.get("incidents", [])] or ["Aucun incident détecté."]
+    if report.get("collection"):
+        lines += ["", "Collecte par source"]
+        for c in report["collection"]:
+            if c.get("status") == "not_published":
+                lines.append(f"{c['source']} : saison pas encore publiée.")
+            else:
+                lines.append(f"{c['source']} : {c['events']} entrées récupérées en {c['seconds']} s" + (" — contrôle nécessaire" if c["issues"] else ""))
     lines += ["", "Derniers changements"]
     lines += [f"{c['at'][:10]} — {describe_changes(c)}" for c in reversed(monitoring.get("recent_changes", []))] or ["Aucun changement détecté depuis l'activation du suivi."]
     lines += ["", "Une disparition d'un site n'est pas considérée comme une annulation.",

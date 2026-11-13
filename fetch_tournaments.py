@@ -18,12 +18,11 @@ from typing import Any, Dict, Iterable, List, Optional, Tuple
 from urllib.parse import urlparse, urljoin
 
 import pandas as pd
-import requests
 from bs4 import BeautifulSoup
 from icalendar import Calendar
 import calendar_quality as quality
-from requests.adapters import HTTPAdapter
-from urllib3.util.retry import Retry
+import calendar_backup
+from collector_http import HTTPClient
 
 # =========================================================
 # Sources
@@ -48,8 +47,6 @@ WPA_CALENDAR_PAGE = "https://wpapool.com/calendar-2/"
 
 PBS_BASES = ["https://probilliardseries.com", "https://www.probilliardseries.com"]
 PBS_LIST_PATHS = ["/events-archive/", "/events/"]
-
-DEFAULT_TIMEOUT = 25
 
 # =========================================================
 # Model
@@ -84,39 +81,19 @@ class Tournament:
 # =========================================================
 # HTTP
 # =========================================================
-def build_session() -> requests.Session:
-    s = requests.Session()
-    s.headers.update(
-        {
-            "User-Agent": (
-                "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
-                "(KHTML, like Gecko) Chrome/120.0 Safari/537.36"
-            ),
-            "Accept-Language": "en-US,en;q=0.9,fr-FR;q=0.8,fr;q=0.7",
-        }
-    )
-
-    retries = Retry(
-        total=4,
-        connect=4,
-        read=4,
-        backoff_factor=0.8,
-        status_forcelist=[429, 500, 502, 503, 504],
-        allowed_methods=["GET", "HEAD"],
-        raise_on_status=False,
-    )
-    s.mount("https://", HTTPAdapter(max_retries=retries))
-    s.mount("http://", HTTPAdapter(max_retries=retries))
-    return s
+HTTP = HTTPClient()
+WPA_KNOWN_CALENDARS = set()
 
 
-SESSION = build_session()
+class CollectionResult(list):
+    """Keep usable records and diagnostics together, including partial failures."""
+    def __init__(self, events=(), issues=()):
+        super().__init__(events)
+        self.issues = list(issues)
 
 
 def http_get(url: str) -> str:
-    r = SESSION.get(url, timeout=DEFAULT_TIMEOUT)
-    r.raise_for_status()
-    return r.text
+    return HTTP.get_text(url)
 
 
 # =========================================================
@@ -634,13 +611,23 @@ def parse_pbs_date_range(raw: str) -> Optional[Tuple[date, date]]:
 # Fetchers: WPA
 # =========================================================
 def fetch_wpa_current(from_d: date, to_d: date) -> List[Tournament]:
-    soup = BeautifulSoup(http_get(WPA_CALENDAR_PAGE), "lxml")
+    issues = []
     calendar_url = None
-    for iframe in soup.select("iframe[src]"):
-        parsed = urlparse(iframe["src"])
-        if parsed.hostname == "teamup.com" and re.fullmatch(r"/ks[a-z0-9]+/?", parsed.path):
-            calendar_url = f"https://teamup.com{parsed.path.rstrip('/')}"
-            break
+    try:
+        soup = BeautifulSoup(http_get(WPA_CALENDAR_PAGE), "lxml")
+        for iframe in soup.select("iframe[src]"):
+            parsed = urlparse(iframe["src"])
+            if parsed.hostname == "teamup.com" and re.fullmatch(r"/ks[a-z0-9]+/?", parsed.path):
+                calendar_url = f"https://teamup.com{parsed.path.rstrip('/')}"
+                break
+        if not calendar_url:
+            raise ValueError("WPA public Teamup calendar not found")
+    except Exception as exc:
+        if len(WPA_KNOWN_CALENDARS) == 1:
+            calendar_url = next(iter(WPA_KNOWN_CALENDARS))
+            issues.append(f"WPA discovery: {exc}; using the previously verified official Teamup URL")
+        else:
+            raise
     if not calendar_url:
         raise ValueError("WPA public Teamup calendar not found")
 
@@ -648,30 +635,48 @@ def fetch_wpa_current(from_d: date, to_d: date) -> List[Tournament]:
     # Request whole years: the ICS subscription omits events older than six months.
     for year in range(max(2026, from_d.year), to_d.year + 1):
         url = f"{calendar_url}/events?startDate={year}-01-01&endDate={year}-12-31"
-        payload = json.loads(http_get(url))
-        if not isinstance(payload.get("events"), list):
-            raise ValueError(f"Invalid WPA calendar response for {year}")
+        try:
+            payload = json.loads(http_get(url))
+            if not isinstance(payload, dict) or not isinstance(payload.get("events"), list):
+                raise ValueError(f"Invalid WPA calendar response for {year}")
+        except Exception as exc:
+            issues.append(f"WPA {year}: {exc}")
+            continue
+        invalid = 0
         for item in payload["events"]:
-            title = clean_title(item.get("title", ""))
-            if not title or item.get("delete_dt"):
+            try:
+                if item.get("delete_dt"):
+                    continue
+                title = clean_title(item.get("title", ""))
+                if not title:
+                    raise ValueError("missing title")
+                start = datetime.fromisoformat(item["start_dt"].replace("Z", "+00:00")).date()
+                # Teamup JSON uses an inclusive end (23:59 for all-day events).
+                end = datetime.fromisoformat(item["end_dt"].replace("Z", "+00:00")).date()
+                if end < start or not item.get("id") or not isinstance(item["id"], (str, int)):
+                    raise ValueError("invalid dates or identifier")
+                location = normalize_location(item.get("location"))
+            except (KeyError, ValueError, TypeError, AttributeError):
+                invalid += 1
                 continue
-            start = datetime.fromisoformat(item["start_dt"]).date()
-            # Teamup JSON uses an inclusive end (23:59 for all-day events).
-            end = datetime.fromisoformat(item["end_dt"]).date()
             if not in_window(start, end, from_d, to_d):
                 continue
             detail_url = f"{calendar_url}/events/{item['id']}"
-            custom = item.get("custom") or {}
+            custom = item.get("custom") if isinstance(item.get("custom"), dict) else {}
             discipline = custom.get("discipline") or []
             if isinstance(discipline, list):
-                discipline = ", ".join(d.replace("_", "-") for d in discipline)
+                discipline = ", ".join(str(d).replace("_", "-") for d in discipline)
+            elif not isinstance(discipline, str):
+                discipline = None
             out.append(Tournament(
                 title=title, organizer="WPA", start=start, end=end,
-                location=normalize_location(item.get("location")), tour="WPA Calendar",
+                location=location, tour="WPA Calendar",
                 source="WPA official calendar (Teamup)", source_url=detail_url,
                 event_id=stable_event_id_from_url(detail_url), discipline=discipline or None,
             ))
-    return dedup(out)
+        if invalid:
+            issues.append(f"WPA {year}: {invalid} invalid event record(s) skipped")
+    return CollectionResult(dedup(out), issues)
 
 
 def fetch_wpa_ics(from_d: date, to_d: date, enrich_limit: int, sleep_s: float) -> List[Tournament]:
@@ -801,6 +806,7 @@ def fetch_matchroom(from_d: date, to_d: date, enrich_limit: int, sleep_s: float)
 
     out: List[Tournament] = []
     enrich_count = 0
+    candidates = invalid = 0
 
     for a in soup.find_all("a"):
         txt = norm_spaces(a.get_text(" ", strip=True))
@@ -817,9 +823,11 @@ def fetch_matchroom(from_d: date, to_d: date, enrich_limit: int, sleep_s: float)
             continue
 
         date_part, rest = m.group(1).strip(), m.group(2).strip()
+        candidates += 1
         try:
             start_d, end_d, _y = parse_matchroom_date_range(date_part)
         except Exception:
+            invalid += 1
             continue
 
         if not in_window(start_d, end_d, from_d, to_d):
@@ -873,7 +881,10 @@ def fetch_matchroom(from_d: date, to_d: date, enrich_limit: int, sleep_s: float)
             )
         )
 
-    return out
+    if not candidates:
+        raise ValueError("Matchroom schedule structure not recognized; no dated event cards")
+    issues = [f"Matchroom: {invalid} event date(s) could not be parsed"] if invalid else []
+    return CollectionResult(out, issues)
 
 
 # =========================================================
@@ -919,14 +930,16 @@ def fetch_epbf(year: int, from_d: date, to_d: date, enrich_limit: int, sleep_s: 
     out: List[Tournament] = []
     tables = soup.find_all("table")
     if not tables:
-        return out
+        raise ValueError("EPBF calendar structure not recognized; no event table")
 
     enrich_count = 0
+    recognized = invalid = 0
 
     for table in tables:
         colmap = find_epbf_table_columns(table)
         if not colmap:
             continue
+        recognized += 1
 
         rows = table.find_all("tr")
         for tr in rows[1:]:
@@ -946,6 +959,7 @@ def fetch_epbf(year: int, from_d: date, to_d: date, enrich_limit: int, sleep_s: 
             try:
                 start_d, end_d = parse_epbf_date_range(raw_date, year=year)
             except Exception:
+                invalid += 1
                 continue
 
             if not in_window(start_d, end_d, from_d, to_d):
@@ -995,10 +1009,13 @@ def fetch_epbf(year: int, from_d: date, to_d: date, enrich_limit: int, sleep_s: 
     by_id: Dict[str, set] = {}
     for t in out:
         by_id.setdefault(t.event_id, set()).add(t.location)
-    return [
+    if not recognized:
+        raise ValueError("EPBF calendar structure not recognized; expected date/event columns")
+    issues = [f"EPBF {year}: {invalid} event date(s) could not be parsed"] if invalid else []
+    return CollectionResult([
         Tournament(**{**t.__dict__, "event_id": stable_event_id_from_url(f"{t.event_id}#{t.location}")})
         if len(by_id[t.event_id]) > 1 else t for t in out
-    ]
+    ], issues)
 
 
 # =========================================================
@@ -1056,8 +1073,7 @@ def pbs_http_get(url: str) -> str:
         "Referer": "https://probilliardseries.com/",
     }
 
-    r = SESSION.get(url, headers=headers, timeout=60, allow_redirects=True)
-    txt = r.text or ""
+    txt = HTTP.get_text(url, headers=headers)
 
     low = txt.lower()
     suspicious = False
@@ -1070,7 +1086,6 @@ def pbs_http_get(url: str) -> str:
         _pbs_dump_debug("suspicious", url, txt)
         print(f"[WARN] PBS suspicious HTML from {url}. First 200 chars: {txt[:200]!r}", file=sys.stderr)
 
-    r.raise_for_status()
     return txt
 
 
@@ -1195,8 +1210,8 @@ def collect_pbs_urls() -> Tuple[List[str], List[str]]:
             if not found_t and not found_s:
                 _pbs_dump_debug("list_no_tournaments", url, html)
 
-    if not tournament_urls and not stop_urls and errors:
-        raise RuntimeError(f"PBS list fetch failed: {' | '.join(errors)}")
+    if not tournament_urls and not stop_urls:
+        raise RuntimeError(f"PBS list fetch failed: {' | '.join(errors) or 'no event links recognized'}")
 
     tournament_urls.sort()
     stop_urls.sort()
@@ -1425,6 +1440,7 @@ def fetch_pbs(from_d: date, to_d: date, stop_enrich_limit: int, sleep_s: float) 
         raise RuntimeError(f"PBS list fetch failed: {e}") from e
 
     enrich_used = 0
+    failed = invalid = 0
 
     for u in tournament_urls:
         yh = year_hint_from_url(u)
@@ -1435,9 +1451,14 @@ def fetch_pbs(from_d: date, to_d: date, stop_enrich_limit: int, sleep_s: float) 
             html = pbs_http_get(u)
         except Exception as e:
             print(f"[WARN] PBS tournament fetch failed: {u}: {e}", file=sys.stderr)
+            failed += 1
             continue
 
-        det = parse_pbs_tournament_page_details(html)
+        try:
+            det = parse_pbs_tournament_page_details(html)
+        except (ValueError, TypeError, KeyError, AttributeError):
+            invalid += 1
+            continue
 
         title = (det.get("title") or "").strip()
         start_d = det.get("start")
@@ -1445,6 +1466,7 @@ def fetch_pbs(from_d: date, to_d: date, stop_enrich_limit: int, sleep_s: float) 
 
         if not title or start_d is None or end_d is None:
             _pbs_dump_debug("tournament_parse_failed", u, html)
+            invalid += 1
             continue
 
         if not in_window(start_d, end_d, from_d, to_d):
@@ -1504,15 +1526,21 @@ def fetch_pbs(from_d: date, to_d: date, stop_enrich_limit: int, sleep_s: float) 
             html = pbs_http_get(stop_u)
         except Exception as e:
             print(f"[WARN] PBS stop fetch failed: {stop_u}: {e}", file=sys.stderr)
+            failed += 1
             continue
 
-        det = parse_pbs_stop_page_details(html)
+        try:
+            det = parse_pbs_stop_page_details(html)
+        except (ValueError, TypeError, KeyError, AttributeError):
+            invalid += 1
+            continue
         title = (det.get("title") or "").strip()
         start_d = det.get("start")
         end_d = det.get("end")
 
         if not title or start_d is None or end_d is None:
             _pbs_dump_debug("stop_parse_failed", stop_u, html)
+            invalid += 1
             continue
 
         if not in_window(start_d, end_d, from_d, to_d):
@@ -1534,7 +1562,10 @@ def fetch_pbs(from_d: date, to_d: date, stop_enrich_limit: int, sleep_s: float) 
             )
         )
 
-    return out
+    issues = []
+    if failed or invalid:
+        issues.append(f"Predator/PBS: {failed} page(s) unavailable, {invalid} event(s) could not be parsed")
+    return CollectionResult(out, issues)
 
 
 # =========================================================
@@ -1698,6 +1729,8 @@ def tournaments_from_records(records):
 
 
 def load_previous_tournaments(path):
+    if Path(path).suffix == ".json":
+        return tournaments_from_records(calendar_backup.load(path))
     return tournaments_from_records(pd.read_excel(path, dtype=str).fillna("").to_dict("records"))
 
 
@@ -1794,6 +1827,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--out", default="tournaments.xlsx", help="Output xlsx")
     p.add_argument("--pbs-out", default="pbs.xlsx", help="Output PBS-only xlsx (always written)")
     p.add_argument("--previous", help="Previously published workbook for source outages")
+    p.add_argument("--backup", help="Write the complete validated source dataset as a checksummed JSON backup")
     p.add_argument("--archive", help="Permanent JSON archive of completed events; keeps all past dates in the published calendar")
     p.add_argument("--refresh-from", help="Refresh from this date when a previous workbook is available; preserve older archives")
     p.add_argument("--report", default="sync-status.json", help="Machine-readable collection status")
@@ -1811,12 +1845,23 @@ def parse_args() -> argparse.Namespace:
 
 
 def main() -> int:
+    global HTTP, WPA_KNOWN_CALENDARS
     args = parse_args()
     today = date.today()
     # Read and validate backups before fetching or overwriting any output.
     previous = load_previous_tournaments(args.previous) if args.previous else []
     archived = load_archive(args.archive)
     monitoring_state = quality.load_state(args.state)
+    HTTP = HTTPClient()
+    fetch_location_from_page.cache_clear()
+    fetch_epbf_location_from_link.cache_clear()
+    fetch_pbs_stop_details.cache_clear()
+    WPA_KNOWN_CALENDARS = set()
+    for t in previous:
+        parsed = urlparse(t.source_url or "")
+        match = re.match(r"^/(ks[a-z0-9]+)/events/", parsed.path)
+        if t.organizer == "WPA" and parsed.hostname == "teamup.com" and match:
+            WPA_KNOWN_CALENDARS.add(f"https://teamup.com/{match[1]}")
 
     if args.from_date:
         from_d = date.fromisoformat(args.from_date)
@@ -1840,20 +1885,37 @@ def main() -> int:
     all_t: List[Tournament] = []
 
     errors = []
+    collection = []
 
     def collect(label, fetch):
+        started = time.monotonic()
+        outcome = {"source": label, "events": 0, "issues": []}
+        organizer = "WPA" if label.startswith("WPA") else "EPBF" if label.startswith("EPBF") else label
+        year = int(label.split()[-1]) if re.fullmatch(r"EPBF \d{4}", label) else None
+        known_upcoming = any(t.organizer == organizer and t.end >= today and (year is None or t.start.year == year) for t in previous)
         try:
             events = fetch()
-            organizer = "WPA" if label.startswith("WPA") else "EPBF" if label.startswith("EPBF") else label
-            year = int(label.split()[-1]) if re.fullmatch(r"EPBF \d{4}", label) else None
-            known_upcoming = any(t.organizer == organizer and t.end >= today and (year is None or t.start.year == year) for t in previous)
+            outcome["issues"].extend(getattr(events, "issues", []))
+            valid = [t for t in events if t.title and t.event_id and t.end >= t.start and (t.end - t.start).days <= 366]
+            if len(valid) != len(events):
+                outcome["issues"].append(f"{label}: {len(events) - len(valid)} invalid event(s) rejected")
+            events = valid
             if not events and known_upcoming:
-                errors.append(f"{label}: no events returned for previously announced tournaments")
+                outcome["issues"].append(f"{label}: no events returned for previously announced tournaments")
             all_t.extend(events)
+            outcome["events"] = len(events)
             print(f"[INFO] {label}: {len(events)} events", flush=True)
         except Exception as exc:
-            errors.append(f"{label}: {exc}")
-            print(f"[WARN] {label}: {exc}", file=sys.stderr)
+            if year and year > today.year and not known_upcoming and ("404" in str(exc) or "no event table" in str(exc)):
+                outcome["status"] = "not_published"
+                print(f"[INFO] {label}: future season not published yet", flush=True)
+            else:
+                outcome["issues"].append(f"{label}: {exc}")
+                print(f"[WARN] {label}: {exc}", file=sys.stderr)
+        outcome.setdefault("status", "partial" if outcome["issues"] and outcome["events"] else "unavailable" if outcome["issues"] else "ok")
+        errors.extend(outcome["issues"])
+        outcome["seconds"] = round(time.monotonic() - started, 2)
+        collection.append(outcome)
 
     # Keep collecting other sources if one provider is unavailable.
     collect("Predator/PBS", lambda: fetch_pbs(refresh_d, to_d, stop_enrich_limit=max(0, args.pbs_enrich_limit), sleep_s=max(0.0, args.sleep)))
@@ -1874,6 +1936,16 @@ def main() -> int:
         [tournament_record(t) for t in all_t], [tournament_record(t) for t in previous], refresh_d)
     all_t = [replace(t, event_id=replacements.get(t.event_id, t.event_id)) for t in all_t]
     fresh = dedup(all_t)
+    # Compare the same source/year and refresh window, never a full season to a
+    # shrinking future-only window. Keep individual valid updates on partial runs.
+    coverage = []
+    for organizer, year in sorted({(t.organizer, t.start.year) for t in previous if t.end >= today and t.start <= to_d}):
+        known = {event_key(t) for t in previous if t.organizer == organizer and t.start.year == year and t.end >= today and t.start <= to_d}
+        seen = {event_key(t) for t in fresh}
+        recovered = len(known & seen)
+        coverage.append({"source": organizer, "year": year, "known_upcoming": len(known), "recovered": recovered})
+        if len(known) >= 5 and recovered < len(known) / 2 and recovered:
+            errors.append(f"{organizer} {year}: partial collection; only {recovered}/{len(known)} known upcoming events recovered")
     if not fresh:
         raise RuntimeError("No fresh events from any source; refusing to publish")
     expected = {"Predator/PBS"} if args.pbs_only else {"Predator/PBS", "WPA", "Matchroom", "EPBF"}
@@ -1890,6 +1962,11 @@ def main() -> int:
     all_t = sorted(all_t, key=lambda x: (x.start, x.organizer, x.title))
     if any(not t.title or t.end < t.start for t in all_t):
         raise ValueError("Invalid dates or title; refusing to publish")
+    if args.archive:
+        retained = {event_key(t) for t in all_t}
+        required = {event_key(t) for t in previous + archived if t.organizer in expected and (t.end < today or in_window(t.start, t.end, from_d, to_d))}
+        if not required <= retained:
+            raise ValueError("Reconciliation lost stored events; refusing to publish")
 
     def counts(events):
         result = {}
@@ -1908,6 +1985,7 @@ def main() -> int:
         "preserved_archive": counts([t for t in restored if t.end < (today if args.archive else refresh_d)]),
         "reused_previous": counts([t for t in restored if t.end >= (today if args.archive else refresh_d)]),
         "published": counts(all_t), "errors": errors,
+        "collection": collection, "coverage": coverage, "network": HTTP.summary(),
     }
     if args.state:
         resolved_ids = {event_key(t): t.event_id for t in all_t}
@@ -1929,6 +2007,8 @@ def main() -> int:
         save_archive(all_t, args.archive, today)
     if args.state:
         quality.save_state(monitoring_state, args.state)
+    if args.backup:
+        calendar_backup.save([tournament_record(t) for t in all_t], args.backup)
 
     print(f"Window: {from_d.isoformat()} → {to_d.isoformat()}")
     print(f"Fetched {len(all_t)} events. First 25:")

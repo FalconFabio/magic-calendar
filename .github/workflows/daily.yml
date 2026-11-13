@@ -3,8 +3,8 @@ name: Build calendars daily
 on:
   workflow_dispatch:
   schedule:
-    # Cron en UTC (02:30 UTC tous les jours)
-    - cron: "30 2 * * *"
+    # Four daily attempts let a temporary outage recover without waiting a day.
+    - cron: "30 2,8,14,20 * * *"
   push:
     branches: ["main"]
 
@@ -38,15 +38,8 @@ jobs:
       - name: Test calendar pipeline
         run: python -m unittest discover -s tests -v
 
-      - name: Download previous published data
-        env:
-          PAGES_BASE: https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}
-        run: |
-          mkdir -p prev
-          curl --retry 3 --max-time 60 -fsSL -o prev/tournaments.xlsx "$PAGES_BASE/tournaments.xlsx"
-
       - name: Generate and reconcile calendars
-        run: python -u fetch_tournaments.py --out tournaments.xlsx --previous prev/tournaments.xlsx --archive data/tournaments-archive.json --state data/calendar-state.json --refresh-from "$(date -u -d '30 days ago' +%F)" --report sync-status.json
+        run: python -u fetch_tournaments.py --out tournaments.xlsx --previous data/tournaments-backup.json --backup data/tournaments-backup.json --archive data/tournaments-archive.json --state data/calendar-state.json --refresh-from "$(date -u -d '30 days ago' +%F)" --report sync-status.json
 
       - name: Collection summary
         run: |
@@ -80,6 +73,7 @@ jobs:
           path: |
             data/tournaments-archive.json
             data/calendar-state.json
+            data/tournaments-backup.json
           if-no-files-found: error
           retention-days: 14
 
@@ -125,6 +119,17 @@ jobs:
           </body></html>
           HTML
 
+      - name: Validate all calendars and archives before publication
+        run: python validate_publication.py --root public
+
+      - name: Save publication manifest
+        uses: actions/upload-artifact@v4
+        with:
+          name: publication-manifest
+          path: public/publication-manifest.json
+          if-no-files-found: error
+          retention-days: 14
+
       - name: Upload Pages artifact
         uses: actions/upload-pages-artifact@v3
         with:
@@ -137,8 +142,26 @@ jobs:
       - name: Deploy to GitHub Pages
         uses: actions/deploy-pages@v4
 
-  keepalive:
+  verify:
     needs: deploy
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install requests
+      - uses: actions/download-artifact@v4
+        with:
+          name: publication-manifest
+      - name: Verify the files actually served to subscribers
+        env:
+          PAGES_BASE: https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}
+        run: python validate_publication.py --verify-url "$PAGES_BASE"
+
+  keepalive:
+    needs: verify
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -158,7 +181,7 @@ jobs:
           fi
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add .github/calendar-heartbeat data/tournaments-archive.json data/calendar-state.json
+          git add .github/calendar-heartbeat data/tournaments-archive.json data/calendar-state.json data/tournaments-backup.json
           if git diff --cached --quiet; then
             exit 0
           fi
