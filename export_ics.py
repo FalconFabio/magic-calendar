@@ -3,11 +3,15 @@
 
 import argparse
 import hashlib
+import json
+from collections import Counter
 from datetime import date, datetime, timedelta, timezone
+from pathlib import Path
 from typing import List, Dict
 
 import pandas as pd
 from icalendar import Calendar, Event, vDuration
+import calendar_quality as quality
 
 
 def parse_args():
@@ -21,6 +25,9 @@ def parse_args():
     p.add_argument("--calname", default="US Pool – Tournaments", help="Calendar display name")
     p.add_argument("--pbs-calname", default=None, help="PBS calendar display name (optional)")
     p.add_argument("--uid-domain", default="uspool.local", help="UID suffix domain")
+    p.add_argument("--state", help="Persistent source verification and change history")
+    p.add_argument("--report", help="Collection report to enrich with calendar statistics")
+    p.add_argument("--status-text", help="Readable French synchronization report")
     return p.parse_args()
 
 
@@ -47,6 +54,8 @@ def build_conflict_set(rows: List[Dict]) -> set:
     conflict = set()
 
     for idx_i, ev in indexed:
+        if ev.get("status") == "CANCELLED":
+            continue
         start = ev["start"]
         end = ev["end"]
 
@@ -90,6 +99,8 @@ def add_event(cal: Calendar, row: Dict, uid_domain: str, mark_conflict: bool):
         title = f"⚠ {title}"
         ev.add("categories", "CONFLICT")
     ev.add("summary", title)
+    if row.get("status"):
+        ev.add("status", row["status"])
 
     if row.get("location"):
         ev.add("location", row["location"])
@@ -101,6 +112,27 @@ def add_event(cal: Calendar, row: Dict, uid_domain: str, mark_conflict: bool):
         ev.add("uid", stable_uid_fallback(row["organizer"], row["start_iso"], row["end_iso"], row["title"], uid_domain))
 
     desc_lines = []
+    monitoring = row.get("monitoring", {})
+    verification = monitoring.get("verification")
+    if verification == "stale":
+        desc_lines.append("À reconfirmer : source temporairement indisponible, dernières données conservées.")
+    elif verification == "missing":
+        desc_lines.append("À reconfirmer : absent de la dernière collecte. Annulation non confirmée.")
+    elif verification == "archived":
+        desc_lines.append("Archive conservée : tournoi passé.")
+    if monitoring.get("last_verified"):
+        desc_lines.append(f"Dernière vérification de cette source : {monitoring['last_verified'][:10]}")
+    if row.get("status") == "CANCELLED":
+        desc_lines.append("Annulation explicitement indiquée par la source retenue.")
+    elif row.get("status") == "TENTATIVE":
+        desc_lines.append("Événement provisoire ou reporté selon la source : dates à confirmer.")
+    if not row.get("location"):
+        desc_lines.append("Lieu à confirmer.")
+    change = monitoring.get("change")
+    if change:
+        desc_lines.append("Dernière modification : " + quality.describe_changes(dict(change, kind="changed", title=row["title"])))
+    if row.get("date_disagreement"):
+        desc_lines.append("Les sources indiquent des dates différentes ; les dates affichées suivent la source retenue ci-dessous.")
 
     # extras
     for label, key in [
@@ -121,6 +153,14 @@ def add_event(cal: Calendar, row: Dict, uid_domain: str, mark_conflict: bool):
             f"URL: {row.get('source_url','')}",
         ]
     )
+    if len(row.get("sources", [])) > 1:
+        desc_lines.append("Sources regroupées pour ce tournoi :")
+        for source in row["sources"]:
+            line = f"{source['organizer']} : {source['start'].isoformat()} au {source['end'].isoformat()} — {source['source_url']}"
+            checked = source.get("monitoring", {}).get("last_verified")
+            if checked:
+                line += f" (vérifié le {checked[:10]})"
+            desc_lines.append(line)
 
     ev.add("description", "\n".join([l for l in desc_lines if l and str(l).strip()]))
 
@@ -171,14 +211,15 @@ def _default_conflicts_path(path: str) -> str:
     return path + "-conflicts.ics"
 
 
-def write_ics(rows: List[Dict], calname: str, ics_path: str, conflicts_path: str, uid_domain: str):
+def write_ics(rows: List[Dict], calname: str, ics_path: str, conflicts_path: str, uid_domain: str, state=None):
+    rows = quality.consolidate(rows, state)
     conflict_set = build_conflict_set(rows)
 
     cal_all = make_calendar(calname)
     cal_conf = make_calendar(calname + " (Conflicts)")
 
     for i, row in enumerate(rows):
-        add_event(cal_all, row, uid_domain, mark_conflict=(i in conflict_set))
+        add_event(cal_all, row, uid_domain, mark_conflict=False)
         if i in conflict_set:
             add_event(cal_conf, row, uid_domain, mark_conflict=True)
 
@@ -187,20 +228,37 @@ def write_ics(rows: List[Dict], calname: str, ics_path: str, conflicts_path: str
 
     with open(conflicts_path, "wb") as f:
         f.write(cal_conf.to_ical())
+    return rows, conflict_set
 
 
 def main():
     args = parse_args()
     rows = load_rows(args.xlsx)
+    state = quality.load_state(args.state)
 
-    write_ics(rows, args.calname, args.ics, args.ics_conflicts, args.uid_domain)
+    published, conflicts = write_ics(rows, args.calname, args.ics, args.ics_conflicts, args.uid_domain, state)
 
     if args.pbs_ics:
         # Always derive both feeds from the same reconciled dataset.
         pbs_rows = [row for row in rows if row["organizer"] == "Predator/PBS"]
         pbs_calname = args.pbs_calname or (args.calname + " (PBS)")
         pbs_conflicts = args.pbs_ics_conflicts or _default_conflicts_path(args.pbs_ics)
-        write_ics(pbs_rows, pbs_calname, args.pbs_ics, pbs_conflicts, args.uid_domain)
+        write_ics(pbs_rows, pbs_calname, args.pbs_ics, pbs_conflicts, args.uid_domain, state)
+    if args.state:
+        quality.save_state(state, args.state)
+    if args.report:
+        report = json.loads(Path(args.report).read_text(encoding="utf-8"))
+        report["calendar"] = {
+            "source_records": len(rows), "events": len(published),
+            "duplicates_removed": len(rows) - len(published), "overlapping_events": len(conflicts),
+            "by_year": dict(sorted(Counter(str(r["start"].year) for r in published).items())),
+            "date_disagreements": sum(r["date_disagreement"] for r in published),
+            "merged": [{"title": r["title"], "event_id": r["event_id"],
+                        "source_ids": [s["event_id"] for s in r["sources"]]} for r in published if len(r["sources"]) > 1],
+        }
+        Path(args.report).write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        if args.status_text:
+            quality.write_status_text(report, args.status_text)
 
 
 if __name__ == "__main__":

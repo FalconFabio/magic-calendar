@@ -21,6 +21,7 @@ import pandas as pd
 import requests
 from bs4 import BeautifulSoup
 from icalendar import Calendar
+import calendar_quality as quality
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
@@ -1730,14 +1731,15 @@ def reconcile_history(fresh, previous, archived, refresh_d, today, from_d, to_d,
         if t.organizer in organizers and (key not in stored or t.end >= refresh_d):
             stored[key] = t
     current = {event_key(t): t for t in fresh}
-    present = {(t.organizer, t.start.year) for t in fresh}
     restored = []
     for key, old in stored.items():
         if old.end < refresh_d or (key not in current and old.end < today):
             # No lower date limit for history. Frozen metadata stays unchanged.
             current[key] = old
             restored.append(old)
-        elif key not in current and (old.organizer, old.start.year) not in present and in_window(old.start, old.end, from_d, to_d):
+        elif key not in current and in_window(old.start, old.end, from_d, to_d):
+            # A missing listing is not proof of cancellation. Monitoring marks it
+            # as unverified until the source explicitly confirms its status.
             current[key] = old
             restored.append(old)
     return list(current.values()), restored
@@ -1795,6 +1797,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--archive", help="Permanent JSON archive of completed events; keeps all past dates in the published calendar")
     p.add_argument("--refresh-from", help="Refresh from this date when a previous workbook is available; preserve older archives")
     p.add_argument("--report", default="sync-status.json", help="Machine-readable collection status")
+    p.add_argument("--state", help="Persistent source verification and change history")
 
     p.add_argument("--wpa-enrich-limit", type=int, default=200, help="Max WPA event pages fetched for location")
     p.add_argument("--matchroom-enrich-limit", type=int, default=200, help="Max Matchroom pages fetched for location")
@@ -1813,6 +1816,7 @@ def main() -> int:
     # Read and validate backups before fetching or overwriting any output.
     previous = load_previous_tournaments(args.previous) if args.previous else []
     archived = load_archive(args.archive)
+    monitoring_state = quality.load_state(args.state)
 
     if args.from_date:
         from_d = date.fromisoformat(args.from_date)
@@ -1840,6 +1844,11 @@ def main() -> int:
     def collect(label, fetch):
         try:
             events = fetch()
+            organizer = "WPA" if label.startswith("WPA") else "EPBF" if label.startswith("EPBF") else label
+            year = int(label.split()[-1]) if re.fullmatch(r"EPBF \d{4}", label) else None
+            known_upcoming = any(t.organizer == organizer and t.end >= today and (year is None or t.start.year == year) for t in previous)
+            if not events and known_upcoming:
+                errors.append(f"{label}: no events returned for previously announced tournaments")
             all_t.extend(events)
             print(f"[INFO] {label}: {len(events)} events", flush=True)
         except Exception as exc:
@@ -1861,7 +1870,10 @@ def main() -> int:
         for y in range(refresh_d.year, to_d.year + 1):
             collect(f"EPBF {y}", lambda: fetch_epbf(y, refresh_d, to_d, enrich_limit=max(0, args.epbf_enrich_limit), sleep_s=max(0.0, args.sleep)))
 
-    fresh = cross_fill_locations(dedup(all_t))
+    replacements = quality.epbf_id_replacements(
+        [tournament_record(t) for t in all_t], [tournament_record(t) for t in previous], refresh_d)
+    all_t = [replace(t, event_id=replacements.get(t.event_id, t.event_id)) for t in all_t]
+    fresh = dedup(all_t)
     if not fresh:
         raise RuntimeError("No fresh events from any source; refusing to publish")
     expected = {"Predator/PBS"} if args.pbs_only else {"Predator/PBS", "WPA", "Matchroom", "EPBF"}
@@ -1897,6 +1909,12 @@ def main() -> int:
         "reused_previous": counts([t for t in restored if t.end >= (today if args.archive else refresh_d)]),
         "published": counts(all_t), "errors": errors,
     }
+    if args.state:
+        resolved_ids = {event_key(t): t.event_id for t in all_t}
+        verified = [replace(t, event_id=resolved_ids.get(event_key(t), t.event_id)) for t in fresh]
+        report["monitoring"] = quality.update_monitoring(
+            monitoring_state, [tournament_record(t) for t in all_t], [tournament_record(t) for t in verified],
+            [tournament_record(t) for t in previous], refresh_d, datetime.now(timezone.utc), errors)
     Path(args.report).write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
     if report["preserved_archive"]:
         print(f"[INFO] Preserved archive: {report['preserved_archive']}")
@@ -1909,6 +1927,8 @@ def main() -> int:
         export_excel(pbs_only, args.pbs_out)
     if args.archive:
         save_archive(all_t, args.archive, today)
+    if args.state:
+        quality.save_state(monitoring_state, args.state)
 
     print(f"Window: {from_d.isoformat()} → {to_d.isoformat()}")
     print(f"Fetched {len(all_t)} events. First 25:")

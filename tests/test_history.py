@@ -32,12 +32,12 @@ class HistoryTests(unittest.TestCase):
         self.assertEqual(restored, [old])
         self.assertIn(old, merged)
 
-    def test_finished_event_removed_by_source_stays_but_future_removal_does_not(self):
+    def test_missing_past_and_future_events_are_retained_for_status_verification(self):
         past = self.event(date(2026, 11, 1), "past")
         removed_future = self.event(date(2026, 12, 1), "removed")
         current = self.event(date(2026, 12, 10), "current")
         merged, _ = self.merge([current], previous=[past, removed_future])
-        self.assertEqual({t.event_id for t in merged}, {"past", "current"})
+        self.assertEqual({t.event_id for t in merged}, {"past", "removed", "current"})
 
     def test_recent_correction_replaces_old_dates_and_frozen_archive_is_unchanged(self):
         recent = self.event(date(2026, 11, 1), "recent")
