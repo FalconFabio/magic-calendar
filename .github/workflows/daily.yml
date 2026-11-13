@@ -3,10 +3,8 @@ name: Build calendars daily
 on:
   workflow_dispatch:
   schedule:
-    # Four daily attempts let a temporary outage recover without waiting a day.
-    - cron: "30 2,8,14,20 * * *"
-  push:
-    branches: ["main"]
+    # One automatic collection per day, at 02:30 UTC.
+    - cron: "30 2 * * *"
 
 permissions:
   contents: read
