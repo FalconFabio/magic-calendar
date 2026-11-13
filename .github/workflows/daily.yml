@@ -43,10 +43,10 @@ jobs:
           PAGES_BASE: https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}
         run: |
           mkdir -p prev
-          curl --retry 3 --max-time 60 -fsSL -o prev/tournaments.xlsx "$PAGES_BASE/tournaments.xlsx" || rm -f prev/tournaments.xlsx
+          curl --retry 3 --max-time 60 -fsSL -o prev/tournaments.xlsx "$PAGES_BASE/tournaments.xlsx"
 
       - name: Generate and reconcile calendars
-        run: python -u fetch_tournaments.py --out tournaments.xlsx --previous prev/tournaments.xlsx --refresh-from "$(date -u +%Y)-01-01" --report sync-status.json
+        run: python -u fetch_tournaments.py --out tournaments.xlsx --previous prev/tournaments.xlsx --archive data/tournaments-archive.json --refresh-from "$(date -u -d '30 days ago' +%F)" --report sync-status.json
 
       - name: Collection summary
         run: |
@@ -72,11 +72,20 @@ jobs:
             --pbs-ics-conflicts pbs-conflicts.ics \
             --uid-domain "${{ github.repository_owner }}.github.io"
 
+      - name: Save archive for repository backup
+        uses: actions/upload-artifact@v4
+        with:
+          name: tournament-archive
+          path: data/tournaments-archive.json
+          if-no-files-found: error
+          retention-days: 14
+
       - name: Prepare Pages artifact
         run: |
           mkdir -p public
           mkdir -p public/debug
           cp sync-status.json public/
+          cp data/tournaments-archive.json public/
           cp tournaments.xlsx public/
           cp tournaments.ics public/
           cp tournaments-conflicts.ics public/
@@ -122,17 +131,23 @@ jobs:
       contents: write
     steps:
       - uses: actions/checkout@v4
-      - name: Record monthly successful publication
+      - uses: actions/download-artifact@v4
+        with:
+          name: tournament-archive
+          path: data
+      - name: Back up history and record monthly publication
         # Monthly repository activity prevents the 60-day inactivity shutdown.
         # A GITHUB_TOKEN push does not trigger another workflow run.
         run: |
           month="$(date -u +%Y-%m)"
-          if [ -f .github/calendar-heartbeat ] && [ "$(cat .github/calendar-heartbeat)" = "$month" ]; then
-            exit 0
+          if [ ! -f .github/calendar-heartbeat ] || [ "$(cat .github/calendar-heartbeat)" != "$month" ]; then
+            echo "$month" > .github/calendar-heartbeat
           fi
-          echo "$month" > .github/calendar-heartbeat
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add .github/calendar-heartbeat
-          git commit -m "Record successful calendar publication for $month"
+          git add .github/calendar-heartbeat data/tournaments-archive.json
+          if git diff --cached --quiet; then
+            exit 0
+          fi
+          git commit -m "Preserve tournament archives and record publication for $month"
           git push

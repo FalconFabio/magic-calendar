@@ -10,7 +10,7 @@ import re
 import sys
 import time
 import unicodedata
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from functools import lru_cache
@@ -1570,10 +1570,16 @@ def choose_better(a: Tournament, b: Tournament) -> Tournament:
     )
 
 
+def event_key(t: Tournament):
+    # A promoter can reuse a URL for next year's edition. Keep both seasons.
+    base_id = re.sub(r"-edition-\d{4}$", "", t.event_id or "")
+    return (t.organizer, base_id or f"{slug(t.title)}|{t.start_iso}", t.start.year)
+
+
 def dedup(tournaments: List[Tournament]) -> List[Tournament]:
-    seen: Dict[str, Tournament] = {}
+    seen = {}
     for t in tournaments:
-        key = (t.event_id or "").strip() or f"{slug(t.title)}|{t.start_iso}|{t.organizer}"
+        key = event_key(t)
         if key not in seen:
             seen[key] = t
         else:
@@ -1641,26 +1647,26 @@ EXPORT_COLUMNS = [
 ]
 
 
+def tournament_record(t: Tournament) -> Dict:
+    return {
+        "start_date": t.start_iso,
+        "end_date": t.end_iso,
+        "title": t.title,
+        "organizer": t.organizer,
+        "tour": t.tour,
+        "location": t.location,
+        "venue_name": t.venue_name,
+        "venue_address": t.venue_address,
+        "prize_fund": t.prize_fund,
+        "discipline": t.discipline,
+        "event_id": t.event_id,
+        "source": t.source,
+        "source_url": t.source_url,
+    }
+
+
 def export_excel(tournaments: List[Tournament], out_path: str) -> None:
-    rows = []
-    for t in tournaments:
-        rows.append(
-            {
-                "start_date": t.start_iso,
-                "end_date": t.end_iso,
-                "title": t.title,
-                "organizer": t.organizer,
-                "tour": t.tour,
-                "location": t.location,
-                "venue_name": t.venue_name,
-                "venue_address": t.venue_address,
-                "prize_fund": t.prize_fund,
-                "discipline": t.discipline,
-                "event_id": t.event_id,
-                "source": t.source,
-                "source_url": t.source_url,
-            }
-        )
+    rows = [tournament_record(t) for t in tournaments]
     df = pd.DataFrame(rows, columns=EXPORT_COLUMNS).sort_values(["start_date", "organizer", "title"])
     df.to_excel(out_path, index=False)
 
@@ -1675,25 +1681,99 @@ def print_missing_locations(tournaments: List[Tournament], limit: int = 30) -> N
         print(f"  - {t.start_iso} {t.organizer} | {t.title} | {t.source_url}")
 
 
+def tournaments_from_records(records):
+    result = []
+    for row in records:
+        missing_columns = set(EXPORT_COLUMNS) - set(row)
+        if missing_columns:
+            raise ValueError(f"Stored event lacks columns: {sorted(missing_columns)}")
+        start = date.fromisoformat(str(row["start_date"])[:10])
+        end = date.fromisoformat(str(row["end_date"])[:10])
+        if not row["title"] or end < start:
+            raise ValueError(f"Invalid stored event: {row['title']!r}")
+        values = {k: row[k] or None for k in EXPORT_COLUMNS if k not in {"start_date", "end_date"}}
+        result.append(Tournament(start=start, end=end, **values))
+    return result
+
+
+def load_previous_tournaments(path):
+    return tournaments_from_records(pd.read_excel(path, dtype=str).fillna("").to_dict("records"))
+
+
+def load_archive(path):
+    if not path or not Path(path).exists():
+        return []
+    data = json.loads(Path(path).read_text(encoding="utf-8"))
+    if data.get("schema_version") != 1 or not isinstance(data.get("events"), list):
+        raise ValueError(f"Invalid archive: {path}")
+    return tournaments_from_records(data["events"])
+
+
+def save_archive(tournaments, path, today):
+    archived = sorted((t for t in tournaments if t.end < today), key=lambda t: (t.start, t.organizer, t.title, t.event_id or ""))
+    data = {"schema_version": 1, "events": [tournament_record(t) for t in archived]}
+    content = json.dumps(data, ensure_ascii=False, indent=2) + "\n"
+    target = Path(path)
+    if not target.exists() or target.read_text(encoding="utf-8") != content:
+        target.parent.mkdir(parents=True, exist_ok=True)
+        temporary = target.with_suffix(target.suffix + ".tmp")
+        temporary.write_text(content, encoding="utf-8")
+        temporary.replace(target)
+    return archived
+
+
+def reconcile_history(fresh, previous, archived, refresh_d, today, from_d, to_d, organizers):
+    """Retain every completed event, even when a provider removes it from its list."""
+    stored = {event_key(t): t for t in archived if t.organizer in organizers}
+    for t in previous:
+        key = event_key(t)
+        if t.organizer in organizers and (key not in stored or t.end >= refresh_d):
+            stored[key] = t
+    current = {event_key(t): t for t in fresh}
+    present = {(t.organizer, t.start.year) for t in fresh}
+    restored = []
+    for key, old in stored.items():
+        if old.end < refresh_d or (key not in current and old.end < today):
+            # No lower date limit for history. Frozen metadata stays unchanged.
+            current[key] = old
+            restored.append(old)
+        elif key not in current and (old.organizer, old.start.year) not in present and in_window(old.start, old.end, from_d, to_d):
+            current[key] = old
+            restored.append(old)
+    return list(current.values()), restored
+
+
+def assign_edition_ids(tournaments):
+    years = {}
+    for t in tournaments:
+        if t.event_id:
+            base = event_key(t)[1]
+            years.setdefault(base, set()).add(t.start.year)
+    result = []
+    for t in tournaments:
+        base = event_key(t)[1]
+        if t.event_id and len(years[base]) > 1 and t.start.year != min(years[base]):
+            t = replace(t, event_id=f"{base}-edition-{t.start.year}")
+        result.append(t)
+    ids = [t.event_id for t in result if t.event_id]
+    if len(ids) != len(set(ids)):
+        raise ValueError("Duplicate calendar identifiers; refusing to publish")
+    return result
+
+
 def restore_missing_sources(tournaments, previous_path, from_d, to_d, organizers=None):
     """Reuse a previous source/year only when its fresh collection is empty."""
     if not previous_path or not Path(previous_path).exists():
         return tournaments, []
-    previous = pd.read_excel(previous_path).fillna("")
-    missing_columns = set(EXPORT_COLUMNS) - set(previous.columns)
-    if missing_columns:
-        raise ValueError(f"Previous workbook lacks columns: {sorted(missing_columns)}")
+    previous = load_previous_tournaments(previous_path)
     present = {(t.organizer, t.start.year) for t in tournaments}
     restored = []
-    for row in previous.to_dict("records"):
-        if organizers is not None and row["organizer"] not in organizers:
+    for t in previous:
+        if organizers is not None and t.organizer not in organizers:
             continue
-        start = date.fromisoformat(str(row["start_date"])[:10])
-        end = date.fromisoformat(str(row["end_date"])[:10])
-        if (row["organizer"], start.year) in present or not in_window(start, end, from_d, to_d):
+        if (t.organizer, t.start.year) in present or not in_window(t.start, t.end, from_d, to_d):
             continue
-        values = {k: row[k] or None for k in EXPORT_COLUMNS if k not in {"start_date", "end_date"}}
-        restored.append(Tournament(start=start, end=end, **values))
+        restored.append(t)
     return tournaments + restored, restored
 
 
@@ -1712,6 +1792,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--out", default="tournaments.xlsx", help="Output xlsx")
     p.add_argument("--pbs-out", default="pbs.xlsx", help="Output PBS-only xlsx (always written)")
     p.add_argument("--previous", help="Previously published workbook for source outages")
+    p.add_argument("--archive", help="Permanent JSON archive of completed events; keeps all past dates in the published calendar")
     p.add_argument("--refresh-from", help="Refresh from this date when a previous workbook is available; preserve older archives")
     p.add_argument("--report", default="sync-status.json", help="Machine-readable collection status")
 
@@ -1729,6 +1810,9 @@ def parse_args() -> argparse.Namespace:
 def main() -> int:
     args = parse_args()
     today = date.today()
+    # Read and validate backups before fetching or overwriting any output.
+    previous = load_previous_tournaments(args.previous) if args.previous else []
+    archived = load_archive(args.archive)
 
     if args.from_date:
         from_d = date.fromisoformat(args.from_date)
@@ -1744,7 +1828,7 @@ def main() -> int:
         raise SystemExit("--to must be >= --from (or adjust --years-past/--years-future)")
 
     refresh_d = from_d
-    if args.refresh_from and args.previous and Path(args.previous).exists():
+    if args.refresh_from and (previous or archived):
         refresh_d = max(from_d, date.fromisoformat(args.refresh_from))
         if refresh_d > to_d:
             raise SystemExit("--refresh-from must be <= --to")
@@ -1777,19 +1861,23 @@ def main() -> int:
         for y in range(refresh_d.year, to_d.year + 1):
             collect(f"EPBF {y}", lambda: fetch_epbf(y, refresh_d, to_d, enrich_limit=max(0, args.epbf_enrich_limit), sleep_s=max(0.0, args.sleep)))
 
-    fresh = dedup(all_t)
+    fresh = cross_fill_locations(dedup(all_t))
     if not fresh:
         raise RuntimeError("No fresh events from any source; refusing to publish")
     expected = {"Predator/PBS"} if args.pbs_only else {"Predator/PBS", "WPA", "Matchroom", "EPBF"}
-    all_t, restored = restore_missing_sources(fresh, args.previous, from_d, to_d, expected)
+    if args.archive:
+        all_t, restored = reconcile_history(fresh, previous, archived, refresh_d, today, from_d, to_d, expected)
+    else:
+        all_t, restored = restore_missing_sources(fresh, args.previous, from_d, to_d, expected)
     if from_d <= today <= to_d:
         missing = expected - {t.organizer for t in all_t if t.start.year == today.year}
         if missing:
             raise RuntimeError(f"No current-year data or backup for {sorted(missing)}; refusing to publish")
 
-    all_t = dedup(all_t)
-    all_t = cross_fill_locations(all_t)
+    all_t = assign_edition_ids(dedup(all_t))
     all_t = sorted(all_t, key=lambda x: (x.start, x.organizer, x.title))
+    if any(not t.title or t.end < t.start for t in all_t):
+        raise ValueError("Invalid dates or title; refusing to publish")
 
     def counts(events):
         result = {}
@@ -1802,9 +1890,11 @@ def main() -> int:
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "window": {"from": from_d.isoformat(), "to": to_d.isoformat()},
         "refresh_from": refresh_d.isoformat(),
+        "archive": {"enabled": bool(args.archive), "completed_events": sum(t.end < today for t in all_t),
+                    "oldest_date": min(t.start for t in all_t).isoformat()},
         "fresh": counts(fresh),
-        "preserved_archive": counts([t for t in restored if t.end < refresh_d]),
-        "reused_previous": counts([t for t in restored if t.end >= refresh_d]),
+        "preserved_archive": counts([t for t in restored if t.end < (today if args.archive else refresh_d)]),
+        "reused_previous": counts([t for t in restored if t.end >= (today if args.archive else refresh_d)]),
         "published": counts(all_t), "errors": errors,
     }
     Path(args.report).write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
@@ -1817,6 +1907,8 @@ def main() -> int:
     if args.pbs_out:
         pbs_only = [t for t in all_t if t.organizer == "Predator/PBS"]
         export_excel(pbs_only, args.pbs_out)
+    if args.archive:
+        save_archive(all_t, args.archive, today)
 
     print(f"Window: {from_d.isoformat()} → {to_d.isoformat()}")
     print(f"Fetched {len(all_t)} events. First 25:")
