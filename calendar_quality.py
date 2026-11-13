@@ -245,11 +245,13 @@ def write_status_text(report, path):
     calendar = report.get("calendar", {})
     monitoring = report.get("monitoring", {})
     lines = ["Calendrier des tournois — état de la synchronisation", "",
-             f"Dernière publication : {report['generated_at']} (UTC)",
+             f"Dernière collecte : {report['generated_at']} (UTC)",
              f"Événements affichés : {calendar.get('events', '?')}",
              f"Doublons regroupés : {calendar.get('duplicates_removed', 0)}",
              f"Entrées sources archivées : {report.get('archive', {}).get('completed_events', 0)}", "", "État des sources"]
     lines += [i["message"] for i in monitoring.get("incidents", [])] or ["Aucun incident détecté."]
+    if report.get("publication_mode") == "formatting_only":
+        lines += ["", "Mise en forme actualisée à partir des données sauvegardées, sans nouvelle collecte."]
     if report.get("collection"):
         lines += ["", "Collecte par source"]
         for c in report["collection"]:

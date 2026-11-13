@@ -3,7 +3,7 @@ import json
 import tempfile
 import unittest
 from contextlib import ExitStack
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from unittest.mock import Mock, patch
 
@@ -14,6 +14,7 @@ import export_ics
 import fetch_tournaments as f
 from collector_http import FetchError, HTTPClient
 from validate_publication import validate, verify_remote
+from reformat_calendar import prepare
 
 
 class Response:
@@ -227,6 +228,37 @@ class BackupAndPublicationTests(unittest.TestCase):
             (root / "tournaments-archive.json").write_text('{"schema_version": 1, "events": []}')
             with self.assertRaisesRegex(ValueError, "Archive"):
                 validate(root, backup, state)
+
+    def test_reformat_preserves_collection_time_and_does_not_repeat_alerts(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            backup, state = self.build(root)
+            report_path = root / "sync-status.json"
+            report = json.loads(report_path.read_text())
+            report["generated_at"] = (datetime.now(timezone.utc) - timedelta(days=1)).isoformat()
+            report["monitoring"]["new_alerts"] = [{"source": "WPA", "message": "Existing incident"}]
+            report_path.write_text(json.dumps(report))
+            original_backup, original_state = backup.read_bytes(), state.read_bytes()
+            with patch.object(f, "http_get", side_effect=AssertionError("Must not fetch sources")):
+                prepare(backup, root / "tournaments.xlsx", report_path, root)
+            rebuilt = json.loads(report_path.read_text())
+            self.assertEqual(rebuilt["generated_at"], report["generated_at"])
+            self.assertEqual(rebuilt["monitoring"]["new_alerts"], [])
+            self.assertEqual((backup.read_bytes(), state.read_bytes()), (original_backup, original_state))
+            with self.assertRaisesRegex(ValueError, "stale"):
+                validate(root, backup, state)
+            self.assertEqual(validate(root, backup, state, allow_stored_data=True)["events"]["tournaments.ics"], 5)
+
+    def test_reformat_rejects_mismatched_published_data_before_writing(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            backup, _ = self.build(root)
+            other = root / "other.xlsx"
+            f.export_excel([self.event(uid="different")], other)
+            original = (root / "tournaments.xlsx").read_bytes()
+            with self.assertRaisesRegex(ValueError, "disagree"):
+                prepare(backup, other, root / "sync-status.json", root)
+            self.assertEqual((root / "tournaments.xlsx").read_bytes(), original)
 
     def test_remote_verification_retries_stale_files_only(self):
         current = b"new calendar"

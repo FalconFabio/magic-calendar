@@ -4,10 +4,12 @@
 import argparse
 import hashlib
 import json
+from html import escape
 from collections import Counter
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import List, Dict
+from urllib.parse import urlparse
 
 import pandas as pd
 from icalendar import Calendar, Event, vDuration
@@ -84,6 +86,106 @@ def make_calendar(calname: str) -> Calendar:
     return cal
 
 
+def readable_date(value):
+    months = ("janvier", "février", "mars", "avril", "mai", "juin", "juillet", "août", "septembre", "octobre", "novembre", "décembre")
+    day = date.fromisoformat(str(value)[:10])
+    return f"{day.day} {months[day.month - 1]} {day.year}"
+
+
+def readable_range(start, end):
+    return readable_date(start) if str(start)[:10] == str(end)[:10] else f"{readable_date(start)} → {readable_date(end)}"
+
+
+def event_notes(row):
+    """Render the same sections as readable plain text and optional rich text."""
+    sections = []
+    monitoring = row.get("monitoring", {})
+    verification = monitoring.get("verification")
+    notices = []
+    if row.get("status") == "CANCELLED":
+        notices.append(("Annulé", "Annulation explicitement indiquée par la source retenue."))
+    elif row.get("status") == "TENTATIVE":
+        notices.append(("À confirmer", "Événement provisoire ou reporté ; dates à confirmer."))
+    if verification == "stale":
+        notices.append(("À reconfirmer", "Source temporairement indisponible. Dernières données conservées."))
+    elif verification == "missing":
+        notices.append(("À reconfirmer", "Absent de la dernière collecte. Annulation non confirmée."))
+    if row.get("date_disagreement"):
+        notices.append(("Dates différentes", "Les dates affichées suivent la source retenue. Voir le détail des sources ci-dessous."))
+    if notices:
+        sections.append(("⚠ À SAVOIR", [[notice] for notice in notices]))
+
+    details = [(label, row[key]) for label, key in (
+        ("Discipline", "discipline"), ("Organisateur", "organizer"),
+        ("Circuit", "tour"), ("Dotation", "prize_fund"),
+    ) if row.get(key)]
+    if details:
+        sections.append(("🎱 TOURNOI", [details]))
+    place = [("", row.get("location") or "Lieu à confirmer.")]
+    for label, key in (("Salle", "venue_name"), ("Adresse", "venue_address")):
+        if row.get(key) and row[key] != row.get("location"):
+            place.append((label, row[key]))
+    sections.append(("📍 LIEU", [place]))
+
+    follow_up = []
+    if verification == "archived":
+        follow_up.append([("", "Tournoi passé, conservé en archive.")])
+    if monitoring.get("last_verified"):
+        follow_up.append([("Dernière vérification", readable_date(monitoring["last_verified"]))])
+    change = monitoring.get("change")
+    if change:
+        before, after = change["before"], change["after"]
+        changes = [("Dernière modification", readable_date(change["at"]))]
+        if (before["start_date"], before["end_date"]) != (after["start_date"], after["end_date"]):
+            changes += [("Anciennes dates", readable_range(before["start_date"], before["end_date"])),
+                        ("Nouvelles dates", readable_range(after["start_date"], after["end_date"]))]
+        if before["location"] != after["location"]:
+            changes += [("Ancien lieu", before["location"] or "Non précisé"),
+                        ("Nouveau lieu", after["location"] or "Non précisé")]
+        if before["title"] != after["title"]:
+            changes += [("Ancien nom", before["title"]), ("Nouveau nom", after["title"])]
+        follow_up.append(changes)
+    if follow_up:
+        sections.append(("🔄 SUIVI", follow_up))
+
+    sources = row.get("sources") or [row]
+    references = []
+    for source in sources:
+        reference = [("", source.get("source") or source.get("organizer") or "Page officielle")]
+        if len(sources) > 1:
+            reference.insert(0, ("", source["organizer"]))
+            reference.append(("Dates", readable_range(source["start"], source["end"])))
+            checked = source.get("monitoring", {}).get("last_verified")
+            if checked:
+                reference.append(("Vérifié le", readable_date(checked)))
+        if source.get("source_url"):
+            reference.append(("", source["source_url"]))
+        references.append(reference)
+    sections.append(("🔗 SOURCES" if len(sources) > 1 else "🔗 SOURCE", references))
+
+    plain, rich = [], []
+    for heading, paragraphs in sections:
+        plain_paragraphs, html_paragraphs = [], []
+        for paragraph in paragraphs:
+            plain_lines, html_lines = [], []
+            for label, value in paragraph:
+                value = str(value)
+                plain_lines.append(f"{label} : {value}" if label else value)
+                html_value = escape(value).replace("\n", "<br>")
+                try:
+                    parsed = urlparse(value) if not label and value.startswith(("https://", "http://")) else None
+                except ValueError:
+                    parsed = None
+                if parsed and parsed.netloc:
+                    html_value = f'<a href="{escape(value, quote=True)}">Consulter la source</a>'
+                html_lines.append(f"<strong>{escape(label)} :</strong> {html_value}" if label else html_value)
+            plain_paragraphs.append("\n".join(plain_lines))
+            html_paragraphs.append("<br>".join(html_lines))
+        plain.append(heading + "\n" + "\n\n".join(plain_paragraphs))
+        rich.append(f"<p><strong>{escape(heading)}</strong><br>" + "<br><br>".join(html_paragraphs) + "</p>")
+    return "\n\n".join(plain), "".join(rich)
+
+
 def add_event(cal: Calendar, row: Dict, uid_domain: str, mark_conflict: bool):
     ev = Event()
     ev.add("dtstamp", datetime.now(timezone.utc))
@@ -111,58 +213,9 @@ def add_event(cal: Calendar, row: Dict, uid_domain: str, mark_conflict: bool):
     else:
         ev.add("uid", stable_uid_fallback(row["organizer"], row["start_iso"], row["end_iso"], row["title"], uid_domain))
 
-    desc_lines = []
-    monitoring = row.get("monitoring", {})
-    verification = monitoring.get("verification")
-    if verification == "stale":
-        desc_lines.append("À reconfirmer : source temporairement indisponible, dernières données conservées.")
-    elif verification == "missing":
-        desc_lines.append("À reconfirmer : absent de la dernière collecte. Annulation non confirmée.")
-    elif verification == "archived":
-        desc_lines.append("Archive conservée : tournoi passé.")
-    if monitoring.get("last_verified"):
-        desc_lines.append(f"Dernière vérification de cette source : {monitoring['last_verified'][:10]}")
-    if row.get("status") == "CANCELLED":
-        desc_lines.append("Annulation explicitement indiquée par la source retenue.")
-    elif row.get("status") == "TENTATIVE":
-        desc_lines.append("Événement provisoire ou reporté selon la source : dates à confirmer.")
-    if not row.get("location"):
-        desc_lines.append("Lieu à confirmer.")
-    change = monitoring.get("change")
-    if change:
-        desc_lines.append("Dernière modification : " + quality.describe_changes(dict(change, kind="changed", title=row["title"])))
-    if row.get("date_disagreement"):
-        desc_lines.append("Les sources indiquent des dates différentes ; les dates affichées suivent la source retenue ci-dessous.")
-
-    # extras
-    for label, key in [
-        ("Venue", "venue_name"),
-        ("Address", "venue_address"),
-        ("Prize fund", "prize_fund"),
-        ("Discipline", "discipline"),
-    ]:
-        v = row.get(key)
-        if v:
-            desc_lines.append(f"{label}: {v}")
-
-    desc_lines.extend(
-        [
-            f"Organizer: {row.get('organizer','')}",
-            f"Tour: {row.get('tour','')}",
-            f"Source: {row.get('source','')}",
-            f"URL: {row.get('source_url','')}",
-        ]
-    )
-    if len(row.get("sources", [])) > 1:
-        desc_lines.append("Sources regroupées pour ce tournoi :")
-        for source in row["sources"]:
-            line = f"{source['organizer']} : {source['start'].isoformat()} au {source['end'].isoformat()} — {source['source_url']}"
-            checked = source.get("monitoring", {}).get("last_verified")
-            if checked:
-                line += f" (vérifié le {checked[:10]})"
-            desc_lines.append(line)
-
-    ev.add("description", "\n".join([l for l in desc_lines if l and str(l).strip()]))
+    plain_notes, rich_notes = event_notes(row)
+    ev.add("description", plain_notes)
+    ev.add("x-alt-desc", rich_notes, parameters={"FMTTYPE": "text/html"})
 
     if row.get("source_url"):
         ev.add("url", row["source_url"])

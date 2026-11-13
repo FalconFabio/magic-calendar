@@ -2,6 +2,11 @@ name: Build calendars daily
 
 on:
   workflow_dispatch:
+    inputs:
+      reformat_only:
+        description: "Republish formatting from saved data without collecting sources"
+        type: boolean
+        default: false
   schedule:
     # One automatic collection per day, at 02:30 UTC.
     - cron: "30 2 * * *"
@@ -37,7 +42,18 @@ jobs:
         run: python -m unittest discover -s tests -v
 
       - name: Generate and reconcile calendars
+        if: ${{ inputs.reformat_only != true }}
         run: python -u fetch_tournaments.py --out tournaments.xlsx --previous data/tournaments-backup.json --backup data/tournaments-backup.json --archive data/tournaments-archive.json --state data/calendar-state.json --refresh-from "$(date -u -d '30 days ago' +%F)" --report sync-status.json
+
+      - name: Rebuild presentation without collecting sources
+        if: ${{ inputs.reformat_only == true }}
+        env:
+          PAGES_BASE: https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}
+        run: |
+          mkdir -p previous
+          curl --retry 3 --max-time 60 -fsSL "$PAGES_BASE/tournaments.xlsx" -o previous/tournaments.xlsx
+          curl --retry 3 --max-time 60 -fsSL "$PAGES_BASE/sync-status.json" -o previous/sync-status.json
+          python reformat_calendar.py --published-workbook previous/tournaments.xlsx --published-report previous/sync-status.json
 
       - name: Collection summary
         run: |
@@ -118,7 +134,14 @@ jobs:
           HTML
 
       - name: Validate all calendars and archives before publication
-        run: python validate_publication.py --root public
+        env:
+          REFORMAT_ONLY: ${{ inputs.reformat_only }}
+        run: |
+          if [ "$REFORMAT_ONLY" = "true" ]; then
+            python validate_publication.py --root public --allow-stored-data
+          else
+            python validate_publication.py --root public
+          fi
 
       - name: Save publication manifest
         uses: actions/upload-artifact@v4

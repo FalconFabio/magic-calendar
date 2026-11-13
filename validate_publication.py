@@ -12,7 +12,7 @@ PUBLIC_FILES = (
 )
 
 
-def validate(root, backup_path, state_path):
+def validate(root, backup_path, state_path, allow_stored_data=False):
     # Keep remote verification lightweight: these dependencies are only needed
     # while checking the source workbook and generated calendars before upload.
     from icalendar import Calendar
@@ -25,7 +25,8 @@ def validate(root, backup_path, state_path):
     report = json.loads((root / "sync-status.json").read_text())
     generated = datetime.fromisoformat(report["generated_at"])
     age = datetime.now(timezone.utc) - generated
-    if age < -timedelta(minutes=5) or age > timedelta(hours=6):
+    reuse = allow_stored_data and report.get("publication_mode") == "formatting_only"
+    if age < -timedelta(minutes=5) or (not reuse and age > timedelta(hours=6)):
         raise ValueError("Collection report is stale or dated in the future")
     raw = fetcher.load_previous_tournaments(root / "tournaments.xlsx")
     backup = fetcher.tournaments_from_records(calendar_backup.load(backup_path))
@@ -107,12 +108,13 @@ def main():
     parser.add_argument("--state", default="data/calendar-state.json")
     parser.add_argument("--verify-url")
     parser.add_argument("--manifest", default="publication-manifest.json")
+    parser.add_argument("--allow-stored-data", action="store_true", help="Allow older verified data for a presentation-only rebuild")
     args = parser.parse_args()
     if args.verify_url:
         verify_remote(args.verify_url, json.loads(Path(args.manifest).read_text()))
         print("All published files match the validated calendar bundle.")
     else:
-        result = validate(args.root, args.backup, args.state)
+        result = validate(args.root, args.backup, args.state, args.allow_stored_data)
         print("Validated calendars:", result["events"])
 
 
