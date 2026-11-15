@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "sha256": "095763b96a42b61a146c5f195b0dda03902ab22d233b83b5c220dceb9a340a1b",
+  "sha256": "e806c18866b3cf7da64556976f8ce5e1c981bd8bd56a414c34f929d795f15e70",
   "events": [
     {
       "start_date": "2021-04-16",
@@ -10561,6 +10561,21 @@
       "event_id": "4e2c820825aa1e2d83c5c8f95209b824bc2e1efa",
       "source": "WPA official calendar (Teamup)",
       "source_url": "https://teamup.com/ksn9rgyj4qdve54a41/events/1829902168"
+    },
+    {
+      "start_date": "2027-11-01",
+      "end_date": "2027-11-10",
+      "title": "WPA World Championships Black Ball",
+      "organizer": "EPBF",
+      "tour": "EPBF Calendar",
+      "location": "Nothern Ireland",
+      "venue_name": null,
+      "venue_address": null,
+      "prize_fund": null,
+      "discipline": null,
+      "event_id": "a099d8bb19aad8665387c45c5ed523501600fa4a",
+      "source": "EPBF calendar table",
+      "source_url": "https://www.epbf.com/calendar/2027/"
     },
     {
       "start_date": "2027-11-01",
