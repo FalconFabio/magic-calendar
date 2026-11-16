@@ -9450,6 +9450,51 @@
       "event_id": "9e338141fdfef0c89418ca3049bc12bee7fa0c27",
       "source": "WPA official calendar (Teamup)",
       "source_url": "https://teamup.com/ksn9rgyj4qdve54a41/events/1998045968"
+    },
+    {
+      "start_date": "2026-11-11",
+      "end_date": "2026-11-15",
+      "title": "Universal Open Ho Chi Minh",
+      "organizer": "Matchroom",
+      "tour": "WNT (Ranking)",
+      "location": "Sniper Billiards Club, Ho Chi Minh, Vietnam",
+      "venue_name": null,
+      "venue_address": null,
+      "prize_fund": "$63,000",
+      "discipline": null,
+      "event_id": "edc20afdc7edbf262c70c0c0e5b8c1f8f2d3c846",
+      "source": "Matchroom schedule",
+      "source_url": "https://worldnineballtour.com/events/universal-open-ho-chi-minh-2026/"
+    },
+    {
+      "start_date": "2026-11-11",
+      "end_date": "2026-11-15",
+      "title": "Ho Chi Minh Open",
+      "organizer": "WPA",
+      "tour": "WPA Calendar",
+      "location": "Ho Chi Minh City (VIE)",
+      "venue_name": null,
+      "venue_address": null,
+      "prize_fund": null,
+      "discipline": "9-ball",
+      "event_id": "fd397f6f563e1be72dc81f235c792b554b722506",
+      "source": "WPA official calendar (Teamup)",
+      "source_url": "https://teamup.com/ksn9rgyj4qdve54a41/events/2194871095"
+    },
+    {
+      "start_date": "2026-11-15",
+      "end_date": "2026-11-15",
+      "title": "EPBF / Predator Youth Tour stop 2026",
+      "organizer": "EPBF",
+      "tour": "EPBF Calendar",
+      "location": "Lodz, Poland",
+      "venue_name": null,
+      "venue_address": null,
+      "prize_fund": null,
+      "discipline": null,
+      "event_id": "f97136b18dac0617361d5bc0d62fb7e2501a0c9d",
+      "source": "EPBF calendar table",
+      "source_url": "https://www.epbf.com/calendar/2026/"
     }
   ]
 }
