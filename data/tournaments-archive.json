@@ -9452,6 +9452,21 @@
       "source_url": "https://teamup.com/ksn9rgyj4qdve54a41/events/1998045968"
     },
     {
+      "start_date": "2026-11-10",
+      "end_date": "2026-11-16",
+      "title": "European Championships for Para Athletes",
+      "organizer": "EPBF",
+      "tour": "EPBF Calendar",
+      "location": "Warschau, Poland",
+      "venue_name": null,
+      "venue_address": null,
+      "prize_fund": null,
+      "discipline": null,
+      "event_id": "5eaa6008033e686efb93b6ba92d5fafb77bac8c7",
+      "source": "EPBF calendar table",
+      "source_url": "https://www.epbf.com/calendar/2026/"
+    },
+    {
       "start_date": "2026-11-11",
       "end_date": "2026-11-15",
       "title": "Universal Open Ho Chi Minh",
