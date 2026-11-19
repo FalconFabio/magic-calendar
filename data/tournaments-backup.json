@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "sha256": "e806c18866b3cf7da64556976f8ce5e1c981bd8bd56a414c34f929d795f15e70",
+  "sha256": "1dd74fe496ce4b6b3468d0dafc24a6df4de78a194b0c1aaafb0a053ac7308a67",
   "events": [
     {
       "start_date": "2021-04-16",
@@ -10038,6 +10038,21 @@
       "source_url": "https://www.epbf.com/calendar/2027/"
     },
     {
+      "start_date": "2027-01-28",
+      "end_date": "2027-01-31",
+      "title": "Predator Treviso Open (EuroTour 1)",
+      "organizer": "WPA",
+      "tour": "WPA Calendar",
+      "location": "Treviso (ITA)",
+      "venue_name": null,
+      "venue_address": null,
+      "prize_fund": null,
+      "discipline": "9-ball",
+      "event_id": "371f47f91f06c8d37089be5eca2b3161d219d807",
+      "source": "WPA official calendar (Teamup)",
+      "source_url": "https://teamup.com/ksn9rgyj4qdve54a41/events/2208397354"
+    },
+    {
       "start_date": "2027-01-29",
       "end_date": "2027-01-31",
       "title": "EPBF EuroTour Women Treviso Open 2027",
@@ -10096,6 +10111,36 @@
       "event_id": "c3b3e4d1e0f5ebb837ee822c8c9b35a3dd77accf",
       "source": "EPBF calendar table",
       "source_url": "https://www.epbf.com/calendar/2027/"
+    },
+    {
+      "start_date": "2027-02-11",
+      "end_date": "2027-02-14",
+      "title": "European 9-Ball Masters",
+      "organizer": "WPA",
+      "tour": "WPA Calendar",
+      "location": "Malmo (SWE)",
+      "venue_name": null,
+      "venue_address": null,
+      "prize_fund": null,
+      "discipline": "9-ball",
+      "event_id": "12bc5dc1c21a449d34ec8132138d2977f2c36a64",
+      "source": "WPA official calendar (Teamup)",
+      "source_url": "https://teamup.com/ksn9rgyj4qdve54a41/events/2208405205"
+    },
+    {
+      "start_date": "2027-02-11",
+      "end_date": "2027-02-14",
+      "title": "Malmo 8-Ball Challenge",
+      "organizer": "WPA",
+      "tour": "WPA Calendar",
+      "location": "Malmo (SWE)",
+      "venue_name": null,
+      "venue_address": null,
+      "prize_fund": null,
+      "discipline": "8-ball",
+      "event_id": "90d770f71f8970f150978ff8c5ed15e96f7888d8",
+      "source": "WPA official calendar (Teamup)",
+      "source_url": "https://teamup.com/ksn9rgyj4qdve54a41/events/2208404735"
     },
     {
       "start_date": "2027-02-16",
@@ -10188,6 +10233,21 @@
       "source_url": "https://www.epbf.com/calendar/2027/"
     },
     {
+      "start_date": "2027-03-26",
+      "end_date": "2027-03-28",
+      "title": "International Bunny Open",
+      "organizer": "WPA",
+      "tour": "WPA Calendar",
+      "location": "Rankweil (AUT)",
+      "venue_name": null,
+      "venue_address": null,
+      "prize_fund": null,
+      "discipline": null,
+      "event_id": "10dfa61c00f71c4b46c7b667180134a8d10b1c3a",
+      "source": "WPA official calendar (Teamup)",
+      "source_url": "https://teamup.com/ksn9rgyj4qdve54a41/events/2208399210"
+    },
+    {
       "start_date": "2027-03-28",
       "end_date": "2027-04-08",
       "title": "2026 AIMAG Asian Indoor & Martial Arts Games",
@@ -10216,6 +10276,21 @@
       "event_id": "7c6f0becef24e902ea6c40d7a24184ee8006b3ee",
       "source": "EPBF calendar table",
       "source_url": "https://www.epbf.com/calendar/2027/"
+    },
+    {
+      "start_date": "2027-04-01",
+      "end_date": "2027-04-04",
+      "title": "Predator Serbian Open (EuroTour 2)",
+      "organizer": "WPA",
+      "tour": "WPA Calendar",
+      "location": "Arandelovac (SRB)",
+      "venue_name": null,
+      "venue_address": null,
+      "prize_fund": null,
+      "discipline": "9-ball",
+      "event_id": "07db786d0fde7ab456cbf6dcdf350502d83dfca4",
+      "source": "WPA official calendar (Teamup)",
+      "source_url": "https://teamup.com/ksn9rgyj4qdve54a41/events/2208400623"
     },
     {
       "start_date": "2027-04-05",
@@ -10261,6 +10336,21 @@
       "event_id": "34ada99c58a57f6821cdc2ffa6f5f84431347709",
       "source": "EPBF calendar table",
       "source_url": "https://www.epbf.com/calendar/2027/"
+    },
+    {
+      "start_date": "2027-04-06",
+      "end_date": "2027-04-16",
+      "title": "EPBF European Championships",
+      "organizer": "WPA",
+      "tour": "WPA Calendar",
+      "location": "Arandelovac (SRB)",
+      "venue_name": null,
+      "venue_address": null,
+      "prize_fund": null,
+      "discipline": "9-ball, 10-ball, 14-1, 8-ball",
+      "event_id": "ca4131cdddbe12079ff72eccbd6fa1634856ae2e",
+      "source": "WPA official calendar (Teamup)",
+      "source_url": "https://teamup.com/ksn9rgyj4qdve54a41/events/2208402295"
     },
     {
       "start_date": "2027-04-12",
@@ -10429,6 +10519,21 @@
     },
     {
       "start_date": "2027-07-10",
+      "end_date": "2027-07-18",
+      "title": "EPBF European Championships",
+      "organizer": "WPA",
+      "tour": "WPA Calendar",
+      "location": "Podcetrtek (SLO)",
+      "venue_name": null,
+      "venue_address": null,
+      "prize_fund": null,
+      "discipline": "9-ball, 10-ball, 14-1, 8-ball",
+      "event_id": "8154880161267a675c74f9e73120752f14744619",
+      "source": "WPA official calendar (Teamup)",
+      "source_url": "https://teamup.com/ksn9rgyj4qdve54a41/events/2208403496"
+    },
+    {
+      "start_date": "2027-07-10",
       "end_date": "2027-07-19",
       "title": "TBA",
       "organizer": "WPA",
@@ -10531,6 +10636,21 @@
       "event_id": "5ac62c02efe7a8ea8814f28cc9211551abce9dc4",
       "source": "WPA official calendar (Teamup)",
       "source_url": "https://teamup.com/ksn9rgyj4qdve54a41/events/2168710500"
+    },
+    {
+      "start_date": "2027-09-14",
+      "end_date": "2027-09-21",
+      "title": "TBC Austria",
+      "organizer": "WPA",
+      "tour": "WPA Calendar",
+      "location": null,
+      "venue_name": null,
+      "venue_address": null,
+      "prize_fund": null,
+      "discipline": null,
+      "event_id": "b68052c1d13714c3e0b3e488afa8031798e9c1b5",
+      "source": "WPA official calendar (Teamup)",
+      "source_url": "https://teamup.com/ksn9rgyj4qdve54a41/events/2208288877"
     },
     {
       "start_date": "2027-10-02",
