@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "sha256": "1dd74fe496ce4b6b3468d0dafc24a6df4de78a194b0c1aaafb0a053ac7308a67",
+  "sha256": "87484253dde5cd76078e2e4841959edf7fb932f6cd61609b463c93a83d1b10ab",
   "events": [
     {
       "start_date": "2021-04-16",
@@ -9911,7 +9911,7 @@
       "location": "Songshan Cultural and Creative Park, Taipei City, Chinese Taipei",
       "venue_name": null,
       "venue_address": null,
-      "prize_fund": null,
+      "prize_fund": "$125,000",
       "discipline": null,
       "event_id": "947180f77f99492f2503a30e00a7cf37bdf22fce",
       "source": "Matchroom schedule",
@@ -10201,6 +10201,36 @@
       "event_id": "927b76e2090a52cfba523dea2cd06d0f6c5ebfaa",
       "source": "EPBF calendar table",
       "source_url": "https://www.epbf.com/calendar/2027/"
+    },
+    {
+      "start_date": "2027-03-09",
+      "end_date": "2027-03-14",
+      "title": "2027 Roobet European Open Pool Championship",
+      "organizer": "Matchroom",
+      "tour": "WNT (Major)",
+      "location": "Hotel Hills, Sarajevo",
+      "venue_name": null,
+      "venue_address": null,
+      "prize_fund": null,
+      "discipline": null,
+      "event_id": "934c70d566c9e5d3dd684e64ec78ccdc9b3a76af",
+      "source": "Matchroom schedule",
+      "source_url": "https://worldnineballtour.com/events/2027-roobet-european-open-pool-championship/"
+    },
+    {
+      "start_date": "2027-03-09",
+      "end_date": "2027-03-14",
+      "title": "European Open 2027",
+      "organizer": "WPA",
+      "tour": "WPA Calendar",
+      "location": "Sarajevo (BIH)",
+      "venue_name": null,
+      "venue_address": null,
+      "prize_fund": null,
+      "discipline": "9-ball",
+      "event_id": "996e7569130243a0677a32d66fb463cb0325fcb6",
+      "source": "WPA official calendar (Teamup)",
+      "source_url": "https://teamup.com/ksn9rgyj4qdve54a41/events/2209017792"
     },
     {
       "start_date": "2027-03-16",
@@ -10586,7 +10616,7 @@
       "location": "Caribe Royale, Orlando, Florida, USA",
       "venue_name": null,
       "venue_address": null,
-      "prize_fund": "$225,000",
+      "prize_fund": null,
       "discipline": null,
       "event_id": "0dde0d8390919906bcc36aa60a60d4bca63a154d",
       "source": "Matchroom schedule",
