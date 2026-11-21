@@ -9510,6 +9510,21 @@
       "event_id": "f97136b18dac0617361d5bc0d62fb7e2501a0c9d",
       "source": "EPBF calendar table",
       "source_url": "https://www.epbf.com/calendar/2026/"
+    },
+    {
+      "start_date": "2026-11-16",
+      "end_date": "2026-11-20",
+      "title": "Oceania Heyball Open",
+      "organizer": "WPA",
+      "tour": "WPA Calendar",
+      "location": "Gold Coast Sports and Leisure Centre, Gold Coast (AUS)",
+      "venue_name": null,
+      "venue_address": null,
+      "prize_fund": null,
+      "discipline": "heyball",
+      "event_id": "8625802d5725b6bc5bc5d96f65de6358fda26b08",
+      "source": "WPA official calendar (Teamup)",
+      "source_url": "https://teamup.com/ksn9rgyj4qdve54a41/events/2098722627"
     }
   ]
 }
