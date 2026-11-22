@@ -9525,6 +9525,66 @@
       "event_id": "8625802d5725b6bc5bc5d96f65de6358fda26b08",
       "source": "WPA official calendar (Teamup)",
       "source_url": "https://teamup.com/ksn9rgyj4qdve54a41/events/2098722627"
+    },
+    {
+      "start_date": "2026-11-17",
+      "end_date": "2026-11-21",
+      "title": "Universal Bangkok Open",
+      "organizer": "Matchroom",
+      "tour": "WNT (Ranking)",
+      "location": "S1 Pool Hall & Sport Bar, Bangkok, Thailand",
+      "venue_name": null,
+      "venue_address": null,
+      "prize_fund": "$69,400",
+      "discipline": null,
+      "event_id": "5a4d39776ce1118ea129b0a933f347b08b0b37b1",
+      "source": "Matchroom schedule",
+      "source_url": "https://worldnineballtour.com/events/bangkok-open-9-ball-championship-2026/"
+    },
+    {
+      "start_date": "2026-11-17",
+      "end_date": "2026-11-21",
+      "title": "Universal Bangkok Open",
+      "organizer": "WPA",
+      "tour": "WPA Calendar",
+      "location": "Bangkok, Thailand",
+      "venue_name": null,
+      "venue_address": null,
+      "prize_fund": null,
+      "discipline": "9-ball",
+      "event_id": "7197fd75834bfa8e69e861b63d2afd697a5b0c57",
+      "source": "WPA official calendar (Teamup)",
+      "source_url": "https://teamup.com/ksn9rgyj4qdve54a41/events/2194872838"
+    },
+    {
+      "start_date": "2026-11-21",
+      "end_date": "2026-11-21",
+      "title": "EPBF / Predator Youth Tour stop 2026",
+      "organizer": "EPBF",
+      "tour": "EPBF Calendar",
+      "location": "Sofia, Bulgaria",
+      "venue_name": null,
+      "venue_address": null,
+      "prize_fund": null,
+      "discipline": null,
+      "event_id": "219431187bda85ea86ea61bb9cc771db2d96cc38",
+      "source": "EPBF calendar table",
+      "source_url": "https://www.epbf.com/calendar/2026/"
+    },
+    {
+      "start_date": "2026-11-21",
+      "end_date": "2026-11-21",
+      "title": "EPBF / Predator Youth Tour stop 2026",
+      "organizer": "EPBF",
+      "tour": "EPBF Calendar",
+      "location": "Tallin, Estonia",
+      "venue_name": null,
+      "venue_address": null,
+      "prize_fund": null,
+      "discipline": null,
+      "event_id": "4d8222351614a42e389a3fcfd628c821ebdbf3c3",
+      "source": "EPBF calendar table",
+      "source_url": "https://www.epbf.com/calendar/2026/"
     }
   ]
 }
