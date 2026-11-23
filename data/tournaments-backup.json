@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "sha256": "87484253dde5cd76078e2e4841959edf7fb932f6cd61609b463c93a83d1b10ab",
+  "sha256": "5d74411aa530379d37f5956c1b23f37b4fc4bf03b41b51110db27793baf31dee",
   "events": [
     {
       "start_date": "2021-04-16",
@@ -10606,6 +10606,21 @@
       "event_id": "529db21f4e76d0d3238f4964a7131cf5c71a566b",
       "source": "EPBF calendar table",
       "source_url": "https://www.epbf.com/calendar/2027/"
+    },
+    {
+      "start_date": "2027-07-29",
+      "end_date": "2027-08-01",
+      "title": "Mezz Women's Pool Festival",
+      "organizer": "WPA",
+      "tour": "WPA Calendar",
+      "location": "Bergisch Gladbach (GER)",
+      "venue_name": null,
+      "venue_address": null,
+      "prize_fund": null,
+      "discipline": "9-ball",
+      "event_id": "975c2c4ada20d83ee7f6ecffb4a7410a13e211a5",
+      "source": "WPA official calendar (Teamup)",
+      "source_url": "https://teamup.com/ksn9rgyj4qdve54a41/events/2210536185"
     },
     {
       "start_date": "2027-08-03",
