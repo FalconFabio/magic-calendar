@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "sha256": "5d74411aa530379d37f5956c1b23f37b4fc4bf03b41b51110db27793baf31dee",
+  "sha256": "8426db46dce4519ad7c0ec976341c15c4e0d05914216a29c29bd600f44d663b1",
   "events": [
     {
       "start_date": "2021-04-16",
@@ -10685,14 +10685,14 @@
     {
       "start_date": "2027-09-14",
       "end_date": "2027-09-21",
-      "title": "TBC Austria",
+      "title": "Austria Pro Billiard Series",
       "organizer": "WPA",
       "tour": "WPA Calendar",
       "location": null,
       "venue_name": null,
       "venue_address": null,
       "prize_fund": null,
-      "discipline": null,
+      "discipline": "10-ball",
       "event_id": "b68052c1d13714c3e0b3e488afa8031798e9c1b5",
       "source": "WPA official calendar (Teamup)",
       "source_url": "https://teamup.com/ksn9rgyj4qdve54a41/events/2208288877"
