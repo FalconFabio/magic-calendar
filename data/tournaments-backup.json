@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "sha256": "8426db46dce4519ad7c0ec976341c15c4e0d05914216a29c29bd600f44d663b1",
+  "sha256": "09d78e2c19404bf0ddb6b6339a209791925313ceca20e82dab8726e2e6b4bc63",
   "events": [
     {
       "start_date": "2021-04-16",
@@ -10396,6 +10396,21 @@
       "event_id": "5a8caedee14d176771472695ce88769fb68c9868",
       "source": "WPA official calendar (Teamup)",
       "source_url": "https://teamup.com/ksn9rgyj4qdve54a41/events/2194861139"
+    },
+    {
+      "start_date": "2027-04-19",
+      "end_date": "2027-04-24",
+      "title": "2027 World Cup of Pool",
+      "organizer": "Matchroom",
+      "tour": "WNT (Blue Ribbon)",
+      "location": "Caribe Royale Resort, Orlando, Florida",
+      "venue_name": null,
+      "venue_address": null,
+      "prize_fund": null,
+      "discipline": null,
+      "event_id": "09fbc494b4a4a83251d781f50ae746f51a6e3a44",
+      "source": "Matchroom schedule",
+      "source_url": "https://worldnineballtour.com/events/2027-world-cup-of-pool/"
     },
     {
       "start_date": "2027-04-19",
